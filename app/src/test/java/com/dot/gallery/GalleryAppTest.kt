@@ -2,6 +2,7 @@ package com.dot.gallery
 
 import com.dot.gallery.feature_node.presentation.util.isLanRouteAvailable
 import com.dot.gallery.feature_node.presentation.util.runNetworkCallbackOperation
+import com.dot.gallery.feature_node.presentation.util.runNetworkCallbackSetup
 import okio.Path.Companion.toPath
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -29,6 +30,19 @@ class GalleryAppTest {
     @Test
     fun networkCallbackOperationReportsSuccessfulRegistration() {
         assertTrue(runNetworkCallbackOperation {})
+    }
+
+    @Test
+    fun networkCallbackSetupStopsWhenInitialLookupLacksPermission() {
+        var callbackRegistered = false
+
+        val result = runNetworkCallbackSetup(
+            initializeCurrentNetwork = { throw SecurityException("missing permission") },
+            registerCallback = { callbackRegistered = true }
+        )
+
+        assertFalse(result)
+        assertFalse(callbackRegistered)
     }
 
     @Test

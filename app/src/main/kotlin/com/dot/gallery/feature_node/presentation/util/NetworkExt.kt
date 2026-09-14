@@ -26,6 +26,14 @@ internal inline fun runNetworkCallbackOperation(operation: () -> Unit): Boolean 
         false
     }
 
+internal inline fun runNetworkCallbackSetup(
+    initializeCurrentNetwork: () -> Unit,
+    registerCallback: () -> Unit
+): Boolean = runNetworkCallbackOperation {
+    initializeCurrentNetwork()
+    registerCallback()
+}
+
 @ExperimentalCoroutinesApi
 @Composable
 fun connectivityState(): State<ConnectionState> {

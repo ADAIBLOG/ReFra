@@ -44,7 +44,7 @@ import com.dot.gallery.core.workers.TempVaultCleanupWorker
 import com.dot.gallery.feature_node.data.data_source.SmartScanFeature
 import com.dot.gallery.feature_node.domain.repository.MediaRepository
 import com.dot.gallery.feature_node.presentation.frameextract.FrameSourceCleanup
-import com.dot.gallery.feature_node.presentation.util.runNetworkCallbackOperation
+import com.dot.gallery.feature_node.presentation.util.runNetworkCallbackSetup
 import com.github.panpf.sketch.PlatformContext
 import com.github.panpf.sketch.SingletonSketch
 import com.github.panpf.sketch.Sketch
@@ -299,7 +299,7 @@ class GalleryApp : Application(), SingletonSketch.Factory, Configuration.Provide
      */
     private fun registerNetworkChangeReconfigure() {
         val connectivityManager = getSystemService(ConnectivityManager::class.java) ?: return
-        var currentDefaultNetwork = connectivityManager.activeNetwork
+        var currentDefaultNetwork: Network? = null
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 val routeChanged = network != currentDefaultNetwork
@@ -316,9 +316,10 @@ class GalleryApp : Application(), SingletonSketch.Factory, Configuration.Provide
                 appScope.launch { cloudProviderInitializer.reconfigureActiveProviders() }
             }
         }
-        if (!runNetworkCallbackOperation {
-                connectivityManager.registerDefaultNetworkCallback(callback)
-            }) {
+        if (!runNetworkCallbackSetup(
+                initializeCurrentNetwork = { currentDefaultNetwork = connectivityManager.activeNetwork },
+                registerCallback = { connectivityManager.registerDefaultNetworkCallback(callback) }
+            )) {
             // ACCESS_NETWORK_STATE unavailable or callback registration failed; skip auto-switch.
             return
         }
