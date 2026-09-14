@@ -67,6 +67,30 @@ class StaticMapURLTest {
     }
 
     @Test
+    fun previewTilesPlaceTheRequestedCoordinateAtTheViewportCenter() {
+        val latitude = 36.4241
+        val longitude = 32.1581
+        val zoom = 14
+        val width = 919
+        val height = 400
+        val worldX = StaticMapURL.lonToWorldTileX(longitude, zoom)
+        val worldY = StaticMapURL.latToWorldTileY(latitude, zoom)
+        val containingTile = StaticMapURL.centeredTiles(latitude, longitude, zoom, width, height)
+            .single { it.tileX == worldX.toInt() && it.tileY == worldY.toInt() }
+
+        assertEquals(
+            width / 2.0,
+            containingTile.leftPx + (worldX - containingTile.tileX) * containingTile.sizePx,
+            0.01,
+        )
+        assertEquals(
+            height / 2.0,
+            containingTile.topPx + (worldY - containingTile.tileY) * containingTile.sizePx,
+            0.01,
+        )
+    }
+
+    @Test
     fun apiKeyIsOptionalAndEncodedWhenPresent() {
         assertFalse(StaticMapURL(46.77, 23.59, apiKey = "").contains("?key="))
         assertFalse(StaticMapURL(46.77, 23.59, apiKey = "   ").contains("?key="))

@@ -4,6 +4,7 @@ import androidx.compose.runtime.Stable
 import kotlinx.serialization.Serializable
 import java.text.Normalizer
 import java.util.Locale
+import kotlin.math.roundToLong
 
 @Stable
 @Serializable
@@ -23,6 +24,14 @@ internal fun locationCoordinateKey(latitude: Double?, longitude: Double?): Strin
     val canonicalLatitude = if (latitude == 0.0) 0.0 else latitude
     val canonicalLongitude = if (longitude == 0.0) 0.0 else longitude
     return "${canonicalLatitude.toBits()}/${canonicalLongitude.toBits()}"
+}
+
+internal fun locationCoordinateGroupKey(latitude: Double?, longitude: Double?): String? {
+    if (latitude == null || longitude == null ||
+        !latitude.isFinite() || !longitude.isFinite() ||
+        latitude !in -90.0..90.0 || longitude !in -180.0..180.0
+    ) return null
+    return "${(latitude * 10_000).roundToLong()}/${(longitude * 10_000).roundToLong()}"
 }
 
 internal fun LocationMedia.locationIdentityKey(): String {
@@ -55,8 +64,10 @@ internal fun matchesLocationCoordinates(
     candidateLongitude: Double?,
     latitude: Double?,
     longitude: Double?,
-): Boolean = latitude != null && longitude != null &&
-        candidateLatitude == latitude && candidateLongitude == longitude
+): Boolean {
+    val candidateKey = locationCoordinateGroupKey(candidateLatitude, candidateLongitude)
+    return candidateKey != null && candidateKey == locationCoordinateGroupKey(latitude, longitude)
+}
 
 private fun normalizedLocationLabel(city: String?, country: String?): String =
     listOf(city, country)

@@ -40,7 +40,9 @@ class MetadataDaoTest {
         dao.upsertCore(metadata(3L, locationName = " ", country = "", city = null))
         dao.upsertCore(metadata(4L, locationName = "Existing formatted address", country = null, city = null))
 
-        assertEquals(listOf(1L, 3L, 4L), dao.getPendingMetadataLocations(10).map { it.mediaId }.sorted())
+        assertEquals(listOf(1L, 3L, 4L), dao.getPendingMetadataLocations(afterMediaId = Long.MIN_VALUE, limit = 10).map { it.mediaId })
+        assertEquals(listOf(1L), dao.getPendingMetadataLocations(afterMediaId = Long.MIN_VALUE, limit = 1).map { it.mediaId })
+        assertEquals(listOf(3L, 4L), dao.getPendingMetadataLocations(afterMediaId = 1L, limit = 10).map { it.mediaId })
         assertEquals(
             0,
             dao.updateGeocodedLocation(
@@ -96,7 +98,7 @@ class MetadataDaoTest {
                 city = "Stale",
             )
         )
-        assertEquals(listOf(3L), dao.getPendingMetadataLocations(10).map { it.mediaId })
+        assertEquals(listOf(3L), dao.getPendingMetadataLocations(afterMediaId = Long.MIN_VALUE, limit = 10).map { it.mediaId })
     }
 
     @Test

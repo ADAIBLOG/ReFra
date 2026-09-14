@@ -26,21 +26,17 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
-import com.bumptech.glide.integration.compose.GlideImage
-import com.bumptech.glide.load.engine.DiskCacheStrategy
 import com.dot.gallery.BuildConfig
 import com.dot.gallery.R
 import com.dot.gallery.core.Constants.Animation.enterAnimation
 import com.dot.gallery.core.Constants.Animation.exitAnimation
 import com.dot.gallery.core.Settings
 import com.dot.gallery.feature_node.domain.model.LocationData
-import com.dot.gallery.feature_node.presentation.util.StaticMapURL
+import com.dot.gallery.feature_node.presentation.util.StaticMapPreview
 import com.dot.gallery.feature_node.presentation.util.effectiveCartoBasemapKey
 import com.dot.gallery.feature_node.presentation.util.launchMap
 import com.dot.gallery.feature_node.presentation.util.rememberAppBottomSheetState
@@ -48,7 +44,6 @@ import com.dot.gallery.ui.theme.isDarkTheme
 import kotlinx.coroutines.launch
 
 @Suppress("KotlinConstantConditions")
-@OptIn(ExperimentalGlideComposeApi::class)
 @Composable
 fun LocationItem(
     modifier: Modifier = Modifier,
@@ -74,21 +69,6 @@ fun LocationItem(
     ) {
         if (locationData != null) {
             val context = LocalContext.current
-            val mapTileUrl = remember(
-                locationData.latitude,
-                locationData.longitude,
-                mapAppearance,
-                effectiveAppIsDark,
-                cartoKey,
-            ) {
-                StaticMapURL(
-                    latitude = locationData.latitude,
-                    longitude = locationData.longitude,
-                    appearance = mapAppearance,
-                    effectiveAppIsDark = effectiveAppIsDark,
-                    apiKey = cartoKey,
-                )
-            }
             Row(
                 modifier = modifier
                     .fillMaxWidth()
@@ -148,18 +128,19 @@ fun LocationItem(
                     ) {
                         Icon(
                             imageVector = Icons.Outlined.Map,
-                            contentDescription = stringResource(R.string.location_map_cd),
+                            contentDescription = null,
                             modifier = Modifier.size(24.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        GlideImage(
-                            model = mapTileUrl,
+                        StaticMapPreview(
+                            latitude = locationData.latitude,
+                            longitude = locationData.longitude,
+                            appearance = mapAppearance,
+                            effectiveAppIsDark = effectiveAppIsDark,
+                            zoom = 12,
+                            apiKey = cartoKey,
                             contentDescription = stringResource(R.string.location_map_cd),
                             modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop,
-                            requestBuilderTransform = {
-                                it.diskCacheStrategy(DiskCacheStrategy.ALL)
-                            }
                         )
                     }
                 }

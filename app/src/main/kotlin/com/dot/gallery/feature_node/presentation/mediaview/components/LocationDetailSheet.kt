@@ -48,7 +48,7 @@ import com.dot.gallery.core.presentation.components.DragHandle
 import com.dot.gallery.core.presentation.components.SetupButton
 import com.dot.gallery.feature_node.domain.model.LocationData
 import com.dot.gallery.feature_node.presentation.util.AppBottomSheetState
-import com.dot.gallery.feature_node.presentation.util.StaticMapURL
+import com.dot.gallery.feature_node.presentation.util.StaticMapPreview
 import com.dot.gallery.feature_node.presentation.util.effectiveCartoBasemapKey
 import com.dot.gallery.feature_node.presentation.util.launchMap
 import com.dot.gallery.ui.theme.isDarkTheme
@@ -69,23 +69,6 @@ fun LocationDetailSheet(
     val effectiveAppIsDark = isDarkTheme()
     val cartoKey = remember(userCartoKey) {
         effectiveCartoBasemapKey(BuildConfig.CARTO_BASEMAP_KEY, userCartoKey)
-    }
-
-    val mapTileUrl = remember(
-        locationData.latitude,
-        locationData.longitude,
-        mapAppearance,
-        effectiveAppIsDark,
-        cartoKey,
-    ) {
-        StaticMapURL(
-            latitude = locationData.latitude,
-            longitude = locationData.longitude,
-            appearance = mapAppearance,
-            effectiveAppIsDark = effectiveAppIsDark,
-            zoom = 14,
-            apiKey = cartoKey,
-        )
     }
 
     if (state.isVisible) {
@@ -123,14 +106,15 @@ fun LocationDetailSheet(
                             .align(Alignment.Center),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    GlideImage(
-                        model = mapTileUrl,
+                    StaticMapPreview(
+                        latitude = locationData.latitude,
+                        longitude = locationData.longitude,
+                        appearance = mapAppearance,
+                        effectiveAppIsDark = effectiveAppIsDark,
+                        zoom = 14,
+                        apiKey = cartoKey,
                         contentDescription = stringResource(R.string.location_map_cd),
                         modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                        requestBuilderTransform = {
-                            it.diskCacheStrategy(DiskCacheStrategy.ALL)
-                        }
                     )
 
                     if (mediaUri != null) {

@@ -52,7 +52,7 @@ import com.dot.gallery.core.presentation.components.NavigationBackButton
 import com.dot.gallery.feature_node.domain.model.GeoMedia
 import com.dot.gallery.feature_node.domain.model.LocationMedia
 import com.dot.gallery.feature_node.domain.model.Media
-import com.dot.gallery.feature_node.domain.model.locationCoordinateKey
+import com.dot.gallery.feature_node.domain.model.locationCoordinateGroupKey
 import com.dot.gallery.feature_node.domain.model.locationLabelKey
 import com.dot.gallery.feature_node.domain.model.MediaMetadataState
 import com.dot.gallery.feature_node.domain.util.getUri
@@ -101,7 +101,7 @@ internal fun ListLocationsContent(
             if (!it.city.isNullOrBlank() || !it.country.isNullOrBlank()) {
                 "name:${locationLabelKey(it.location)}"
             } else {
-                locationCoordinateKey(it.latitude, it.longitude)
+                locationCoordinateGroupKey(it.latitude, it.longitude)
                     ?.let { key -> "coordinates:$key" }
                     ?: "label:${locationLabelKey(it.location)}"
             }

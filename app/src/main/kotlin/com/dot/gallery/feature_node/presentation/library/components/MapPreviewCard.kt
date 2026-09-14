@@ -33,7 +33,7 @@ import com.dot.gallery.core.Settings
 import com.dot.gallery.feature_node.domain.model.Media
 import com.dot.gallery.feature_node.domain.util.getUri
 import com.dot.gallery.feature_node.presentation.util.GlideInvalidation
-import com.dot.gallery.feature_node.presentation.util.StaticMapURL
+import com.dot.gallery.feature_node.presentation.util.StaticMapPreview
 import com.dot.gallery.feature_node.presentation.util.effectiveCartoBasemapKey
 
 /**
@@ -54,20 +54,6 @@ fun MapPreviewCard(
     val cartoKey = remember(userCartoKey) {
         effectiveCartoBasemapKey(BuildConfig.CARTO_BASEMAP_KEY, userCartoKey)
     }
-    val mapTileUrl = remember(latitude, longitude, mapAppearance, effectiveAppIsDark, cartoKey) {
-        if (latitude != null && longitude != null) {
-            StaticMapURL(
-                latitude = latitude,
-                longitude = longitude,
-                appearance = mapAppearance,
-                effectiveAppIsDark = effectiveAppIsDark,
-                zoom = 8,
-                apiKey = cartoKey,
-            )
-        } else {
-            null
-        }
-    }
 
     Box(
         modifier = modifier
@@ -85,15 +71,15 @@ fun MapPreviewCard(
                 .align(Alignment.Center),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (mapTileUrl != null) {
-            GlideImage(
-                model = mapTileUrl,
-                contentDescription = null,
+        if (latitude != null && longitude != null) {
+            StaticMapPreview(
+                latitude = latitude,
+                longitude = longitude,
+                appearance = mapAppearance,
+                effectiveAppIsDark = effectiveAppIsDark,
+                zoom = 8,
+                apiKey = cartoKey,
                 modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-                requestBuilderTransform = {
-                    it.diskCacheStrategy(DiskCacheStrategy.ALL)
-                }
             )
         }
 

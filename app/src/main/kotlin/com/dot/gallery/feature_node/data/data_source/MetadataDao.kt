@@ -122,7 +122,8 @@ interface MetadataDao {
         """
         SELECT mediaId, gpsLatitude, gpsLongitude
         FROM media_metadata_core
-        WHERE gpsLatitude IS NOT NULL
+        WHERE mediaId > :afterMediaId
+          AND gpsLatitude IS NOT NULL
           AND gpsLongitude IS NOT NULL
           AND COALESCE(TRIM(gpsLocationNameCountry), '') = ''
           AND COALESCE(TRIM(gpsLocationNameCity), '') = ''
@@ -130,7 +131,10 @@ interface MetadataDao {
         LIMIT :limit
         """
     )
-    suspend fun getPendingMetadataLocations(limit: Int): List<PendingMetadataLocation>
+    suspend fun getPendingMetadataLocations(
+        afterMediaId: Long,
+        limit: Int,
+    ): List<PendingMetadataLocation>
 
     @Query(
         """

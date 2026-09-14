@@ -17,6 +17,7 @@ import com.dot.gallery.feature_node.domain.model.GeoMedia
 import com.dot.gallery.feature_node.domain.model.LocationMedia
 import com.dot.gallery.feature_node.domain.model.Media
 import com.dot.gallery.feature_node.domain.model.MediaState
+import com.dot.gallery.feature_node.domain.model.locationCoordinateGroupKey
 import com.dot.gallery.feature_node.domain.model.locationIdentityKey
 import com.dot.gallery.feature_node.domain.util.isCloud
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -264,7 +265,13 @@ internal fun buildActionableLocations(
 
     val newestByLocation = LinkedHashMap<String, LocationMedia>()
     locationByMediaId.values.forEach { item ->
-        val key = item.locationIdentityKey()
+        val key = if (!item.city.isNullOrBlank() || !item.country.isNullOrBlank()) {
+            item.locationIdentityKey()
+        } else {
+            locationCoordinateGroupKey(item.latitude, item.longitude)
+                ?.let { "coordinates:$it" }
+                ?: item.locationIdentityKey()
+        }
         val existing = newestByLocation[key]
         if (existing == null || item.media.definedTimestamp > existing.media.definedTimestamp) {
             newestByLocation[key] = item

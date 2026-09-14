@@ -4,10 +4,12 @@ import com.dot.gallery.cloud.core.CloudMapMarker
 import com.dot.gallery.cloud.core.ProviderType
 import com.dot.gallery.feature_node.presentation.location.AccountCloudMapMarker
 import com.dot.gallery.feature_node.presentation.location.MapGeoBounds
+import com.dot.gallery.feature_node.presentation.location.buildActionableLocations
 import com.dot.gallery.feature_node.presentation.location.MapPhotoClusterer
 import com.dot.gallery.feature_node.presentation.location.MapPhotoPoint
 import com.dot.gallery.feature_node.domain.model.LocationMedia
 import com.dot.gallery.feature_node.domain.model.Media
+import com.dot.gallery.feature_node.domain.model.locationCoordinateGroupKey
 import com.dot.gallery.feature_node.domain.model.locationCoordinateKey
 import com.dot.gallery.feature_node.domain.model.locationIdentityKey
 import com.dot.gallery.feature_node.domain.model.locationLabelKey
@@ -170,11 +172,37 @@ class MapPhotoClustererTest {
     }
 
     @Test
-    fun coordinatesThatRoundToTheSameLabelKeepDistinctIdentity() {
+    fun coordinatesThatRoundToTheSameLabelShareAGroupButKeepDistinctIdentity() {
         val first = locationMedia(1L, "17.8490, 73.8034", 17.84901, 73.80341)
         val second = locationMedia(2L, "17.8490, 73.8034", 17.84902, 73.80342)
 
         assertNotEquals(first.locationIdentityKey(), second.locationIdentityKey())
+        assertEquals(
+            locationCoordinateGroupKey(first.latitude, first.longitude),
+            locationCoordinateGroupKey(second.latitude, second.longitude),
+        )
+        assertTrue(
+            matchesLocationCoordinates(
+                first.latitude,
+                first.longitude,
+                second.latitude,
+                second.longitude,
+            )
+        )
+        assertFalse(matchesLocationCoordinates(17.84901, 73.80341, 17.8492, 73.8036))
+    }
+
+    @Test
+    fun coordinateOnlyMediaWithTheSameDisplayedLocationProduceOneCard() {
+        val first = locationMedia(1L, "36.4241, 32.1581", 36.42411, 32.15811)
+        val second = locationMedia(2L, "36.4241, 32.1581", 36.42412, 32.15812)
+        val locations = buildActionableLocations(
+            localLocations = listOf(first, second),
+            geoMedia = emptyList(),
+            cachedCloudMedia = emptyList(),
+        )
+
+        assertEquals(1, locations.size)
     }
 
     private fun point(id: Long, latitude: Double, longitude: Double, timestamp: Long) =

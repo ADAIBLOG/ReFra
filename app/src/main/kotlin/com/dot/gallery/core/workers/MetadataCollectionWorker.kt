@@ -20,6 +20,7 @@ import com.dot.gallery.feature_node.data.data_source.InternalDatabase
 import com.dot.gallery.feature_node.domain.model.MediaMetadata
 import com.dot.gallery.feature_node.domain.model.MediaVersion
 import com.dot.gallery.feature_node.domain.model.bestEffortReverseGeocode
+import com.dot.gallery.feature_node.domain.model.locationCoordinateGroupKey
 import com.dot.gallery.feature_node.domain.model.metadataParsingPolicy
 import com.dot.gallery.feature_node.domain.model.retrieveExtraMediaMetadata
 import com.dot.gallery.feature_node.domain.repository.MediaRepository
@@ -141,41 +142,51 @@ class MetadataCollectionWorker @AssistedInject constructor(
     private suspend fun reverseGeocodePendingMetadata() {
         val activeGeocoder = geocoder ?: return
         val metadataDao = database.getMetadataDao()
-        val pending = metadataDao.getPendingMetadataLocations(METADATA_GEOCODE_REPAIR_BATCH)
-        if (pending.isEmpty()) return
-        val addressByCoordinate = HashMap<Pair<Long, Long>, Address?>()
+        val addressByCoordinate = HashMap<String, Address?>()
+        var afterMediaId = Long.MIN_VALUE
+        var examined = 0
         var repaired = 0
-        for (item in pending) {
-            if (!currentCoroutineContext().isActive || isStopped) return
-            val coordinateKey = item.gpsLatitude.toBits() to item.gpsLongitude.toBits()
-            val address = if (addressByCoordinate.containsKey(coordinateKey)) {
-                addressByCoordinate[coordinateKey]
-            } else {
-                bestEffortReverseGeocode(
-                    enabled = true,
-                    latitude = item.gpsLatitude,
-                    longitude = item.gpsLongitude
-                ) { latitude, longitude ->
-                    withContext(Dispatchers.IO) {
-                        activeGeocoder.getFromLocation(latitude, longitude, 1).orEmpty().firstOrNull()
-                    }
-                }.also { addressByCoordinate[coordinateKey] = it }
-            } ?: continue
-            currentCoroutineContext().ensureActive()
-            val locationName = address.formattedAddress.takeIf(String::isNotBlank)
-            val country = address.countryName?.takeIf(String::isNotBlank)
-            val city = address.locationGroupName
-            if (locationName == null && country == null && city == null) continue
-            repaired += metadataDao.updateGeocodedLocation(
-                mediaId = item.mediaId,
-                latitude = item.gpsLatitude,
-                longitude = item.gpsLongitude,
-                locationName = locationName,
-                country = country,
-                city = city,
+        while (currentCoroutineContext().isActive && !isStopped) {
+            val pending = metadataDao.getPendingMetadataLocations(
+                afterMediaId = afterMediaId,
+                limit = METADATA_GEOCODE_REPAIR_BATCH,
             )
+            if (pending.isEmpty()) break
+            afterMediaId = pending.last().mediaId
+            examined += pending.size
+            for (item in pending) {
+                if (!currentCoroutineContext().isActive || isStopped) return
+                val coordinateKey = locationCoordinateGroupKey(item.gpsLatitude, item.gpsLongitude)
+                    ?: "${item.gpsLatitude.toBits()}/${item.gpsLongitude.toBits()}"
+                val address = if (addressByCoordinate.containsKey(coordinateKey)) {
+                    addressByCoordinate[coordinateKey]
+                } else {
+                    bestEffortReverseGeocode(
+                        enabled = true,
+                        latitude = item.gpsLatitude,
+                        longitude = item.gpsLongitude
+                    ) { latitude, longitude ->
+                        withContext(Dispatchers.IO) {
+                            activeGeocoder.getFromLocation(latitude, longitude, 1).orEmpty().firstOrNull()
+                        }
+                    }.also { addressByCoordinate[coordinateKey] = it }
+                } ?: continue
+                currentCoroutineContext().ensureActive()
+                val locationName = address.formattedAddress.takeIf(String::isNotBlank)
+                val country = address.countryName?.takeIf(String::isNotBlank)
+                val city = address.locationGroupName
+                if (locationName == null && country == null && city == null) continue
+                repaired += metadataDao.updateGeocodedLocation(
+                    mediaId = item.mediaId,
+                    latitude = item.gpsLatitude,
+                    longitude = item.gpsLongitude,
+                    locationName = locationName,
+                    country = country,
+                    city = city,
+                )
+            }
         }
-        printDebug("Reverse geocoded $repaired of ${pending.size} pending metadata locations")
+        printDebug("Reverse geocoded $repaired of $examined pending metadata locations")
     }
 
     private suspend fun collectCloudMediaMetadata() {
