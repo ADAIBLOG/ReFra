@@ -57,6 +57,38 @@ class MediaViewerVisualPolicyTest {
     }
 
     @Test
+    fun slideshowWaitsForMediaLoadingBeforeExitingAnEmptyPlaylist() {
+        assertFalse(
+            shouldExitEmptySlideshow(
+                isActive = true,
+                isLoading = true,
+                hasItems = false,
+            )
+        )
+        assertTrue(
+            shouldExitEmptySlideshow(
+                isActive = true,
+                isLoading = false,
+                hasItems = false,
+            )
+        )
+        assertFalse(
+            shouldExitEmptySlideshow(
+                isActive = true,
+                isLoading = false,
+                hasItems = true,
+            )
+        )
+        assertFalse(
+            shouldExitEmptySlideshow(
+                isActive = false,
+                isLoading = false,
+                hasItems = false,
+            )
+        )
+    }
+
+    @Test
     fun sharedElementUsesCurrentPageWhenSettledPageLagsAfterFastScroll() {
         assertFalse(isMediaViewerSharedElementPage(page = 0, currentPage = 1))
         assertTrue(isMediaViewerSharedElementPage(page = 1, currentPage = 1))

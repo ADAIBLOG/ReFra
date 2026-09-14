@@ -468,6 +468,12 @@ internal fun shouldDismissMissingMediaTarget(
     isStandalone: Boolean,
 ): Boolean = !isLoading && !targetFound && hasMedia && !isStandalone
 
+internal fun shouldExitEmptySlideshow(
+    isActive: Boolean,
+    isLoading: Boolean,
+    hasItems: Boolean,
+): Boolean = isActive && !isLoading && !hasItems
+
 internal fun isMediaViewerSharedElementPage(
     page: Int,
     currentPage: Int,
@@ -934,8 +940,15 @@ fun <T : Media> MediaViewScreen(
     }
     BackHandler(slideshowActive) { exitSlideshow() }
 
-    LaunchedEffect(slideshowActive, pagerItems.isEmpty()) {
-        if (slideshowActive && pagerItems.isEmpty()) exitSlideshow()
+    LaunchedEffect(slideshowActive, mediaState.value.isLoading, pagerItems.isEmpty()) {
+        if (shouldExitEmptySlideshow(
+                isActive = slideshowActive,
+                isLoading = mediaState.value.isLoading,
+                hasItems = pagerItems.isNotEmpty(),
+            )
+        ) {
+            exitSlideshow()
+        }
     }
 
     // Hide all chrome and keep the screen awake while the slideshow is running.
