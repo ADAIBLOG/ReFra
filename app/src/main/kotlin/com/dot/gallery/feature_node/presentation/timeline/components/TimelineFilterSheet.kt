@@ -28,6 +28,7 @@ import com.dot.gallery.core.presentation.components.SetupButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -44,27 +45,35 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.dot.gallery.R
+import com.dot.gallery.core.Settings.Album.LastSort
+import com.dot.gallery.core.presentation.components.FilterKind
 import com.dot.gallery.feature_node.domain.model.Album
+import com.dot.gallery.feature_node.domain.util.OrderType
 import com.dot.gallery.feature_node.domain.model.MediaTypeFilter
 import com.dot.gallery.feature_node.domain.model.TimelineFilter
 import com.dot.gallery.feature_node.presentation.util.AppBottomSheetState
 import kotlinx.coroutines.launch
 
 internal const val TIMELINE_FILTER_CHIP_VISUAL_TAG = "TimelineFilterChipVisual"
+internal const val TIMELINE_CAPTURE_SORT_TAG = "TimelineCaptureSort"
+internal const val TIMELINE_MODIFIED_SORT_TAG = "TimelineModifiedSort"
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun TimelineFilterSheet(
     sheetState: AppBottomSheetState,
     currentFilter: TimelineFilter,
+    currentSort: LastSort,
     availableYears: List<Int>,
     availableAlbums: List<Album>,
-    onApply: (TimelineFilter) -> Unit,
+    indexProgress: Int?,
+    onApply: (TimelineFilter, LastSort) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
 
     if (sheetState.isVisible) {
         var filter by remember(currentFilter) { mutableStateOf(currentFilter) }
+        var sort by remember(currentSort) { mutableStateOf(currentSort) }
 
         ModalBottomSheet(
             sheetState = sheetState.sheetState,
@@ -86,11 +95,58 @@ fun TimelineFilterSheet(
                 ) {
                     // Title
                     Text(
-                        text = stringResource(R.string.filter_title),
+                        text = stringResource(R.string.timeline_controls),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(bottom = 16.dp)
                     )
+
+                    FilterSectionHeader(stringResource(R.string.order_by))
+                    Column(
+                        modifier = Modifier.padding(bottom = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        TimelineSortOption(
+                            title = stringResource(R.string.capture_time),
+                            summary = stringResource(R.string.capture_time_summary),
+                            testTag = TIMELINE_CAPTURE_SORT_TAG,
+                            selected = sort.kind == FilterKind.DATE,
+                            onClick = { sort = sort.copy(kind = FilterKind.DATE) }
+                        )
+                        TimelineSortOption(
+                            title = stringResource(R.string.sort_by_date_modified),
+                            summary = stringResource(R.string.modified_time_summary),
+                            testTag = TIMELINE_MODIFIED_SORT_TAG,
+                            selected = sort.kind == FilterKind.DATE_MODIFIED,
+                            onClick = { sort = sort.copy(kind = FilterKind.DATE_MODIFIED) }
+                        )
+                    }
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    ) {
+                        TimelineFilterChip(
+                            label = stringResource(R.string.sort_descending),
+                            selected = sort.orderType == OrderType.Descending,
+                            role = Role.RadioButton,
+                            onClick = { sort = sort.copy(orderType = OrderType.Descending) }
+                        )
+                        TimelineFilterChip(
+                            label = stringResource(R.string.sort_ascending),
+                            selected = sort.orderType == OrderType.Ascending,
+                            role = Role.RadioButton,
+                            onClick = { sort = sort.copy(orderType = OrderType.Ascending) }
+                        )
+                    }
+                    if (indexProgress != null) {
+                        Text(
+                            text = stringResource(R.string.capture_time_indexing, indexProgress),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 16.dp)
+                        )
+                    }
 
                     // Type section
                     FilterSectionHeader(stringResource(R.string.filter_type))
@@ -192,7 +248,10 @@ fun TimelineFilterSheet(
                         containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                         contentColor = MaterialTheme.colorScheme.onSurface,
                         text = stringResource(R.string.filter_reset),
-                        onClick = { filter = TimelineFilter() }
+                        onClick = {
+                            filter = TimelineFilter()
+                            sort = LastSort(OrderType.Descending, FilterKind.DATE)
+                        }
                     )
                     SetupButton(
                         modifier = Modifier.weight(1f),
@@ -201,12 +260,55 @@ fun TimelineFilterSheet(
                         applyInsets = false,
                         text = stringResource(R.string.filter_apply),
                         onClick = {
-                            onApply(filter)
+                            onApply(filter, sort)
                             scope.launch { sheetState.hide() }
                         }
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+internal fun TimelineSortOption(
+    title: String,
+    summary: String,
+    testTag: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val shape = RoundedCornerShape(16.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(testTag)
+            .clip(shape)
+            .background(
+                if (selected) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceContainer
+            )
+            .selectable(
+                selected = selected,
+                role = Role.RadioButton,
+                onClick = onClick
+            )
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -226,6 +328,7 @@ private fun FilterSectionHeader(title: String) {
 internal fun TimelineFilterChip(
     label: String,
     selected: Boolean,
+    role: Role = Role.Checkbox,
     onClick: () -> Unit,
 ) {
     val backgroundColor by animateColorAsState(
@@ -251,7 +354,7 @@ internal fun TimelineFilterChip(
             .clip(shape)
             .selectable(
                 selected = selected,
-                role = Role.Checkbox,
+                role = role,
                 onClick = onClick,
             ),
         contentAlignment = Alignment.Center,

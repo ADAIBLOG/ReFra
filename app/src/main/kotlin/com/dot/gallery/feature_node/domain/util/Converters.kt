@@ -2,6 +2,7 @@ package com.dot.gallery.feature_node.domain.util
 
 import android.net.Uri
 import androidx.room.TypeConverter
+import com.dot.gallery.feature_node.domain.model.CaptureTimeOrigin
 import com.dot.gallery.feature_node.domain.model.Media
 import kotlinx.serialization.json.Json
 import java.nio.ByteBuffer
@@ -51,6 +52,12 @@ object Converters {
 
     @TypeConverter
     fun toUUID(value: String): UUID = UUID.fromString(value)
+
+    @TypeConverter
+    fun fromCaptureTimeOrigin(origin: CaptureTimeOrigin): String = origin.storedValue
+
+    @TypeConverter
+    fun toCaptureTimeOrigin(value: String): CaptureTimeOrigin = CaptureTimeOrigin.fromStoredValue(value)
 
     @TypeConverter
     fun fromFloatArray(array: FloatArray): ByteArray = FloatVectorCodec.encode(array)

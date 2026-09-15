@@ -620,6 +620,22 @@ object Settings {
         fun getSecureMode(context: Context) =
             context.activeDataStore.data.map { it[SECURE_MODE] ?: false }
 
+        private val TIMELINE_SORT = stringPreferencesKey("timeline_sort_obj")
+
+        fun getTimelineSortFlow(context: Context): Flow<Album.LastSort> =
+            context.activeDataStore.data.map { prefs ->
+                prefs[TIMELINE_SORT]?.let {
+                    runCatching { Json.decodeFromString<Album.LastSort>(it) }.getOrNull()
+                } ?: Album.LastSort(OrderType.Descending, FilterKind.DATE)
+            }
+
+        @Composable
+        fun rememberTimelineSort() =
+            rememberPreferenceSerializable(
+                keyString = TIMELINE_SORT,
+                defaultValue = Album.LastSort(OrderType.Descending, FilterKind.DATE)
+            )
+
         private val TIMELINE_GROUP_BY_MONTH = booleanPreferencesKey("timeline_group_by_month")
 
         @Composable

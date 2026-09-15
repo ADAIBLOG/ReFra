@@ -5,11 +5,13 @@
 
 package com.dot.gallery.feature_node.data.repository
 
+import android.content.ContentResolver
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import android.location.Geocoder
@@ -21,6 +23,7 @@ import android.provider.MediaStore
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.IntentSenderRequest
 import androidx.datastore.preferences.core.Preferences
+import androidx.exifinterface.media.ExifInterface
 import androidx.room.withTransaction
 import androidx.work.WorkManager
 import com.dot.gallery.cloud.data.entity.CloudMediaEntity
@@ -40,7 +43,9 @@ import com.dot.gallery.core.metadata.MetadataSanitizer
 import com.dot.gallery.core.metadata.SanitizationCapability
 import com.dot.gallery.core.metadata.SanitizationResult
 import com.dot.gallery.core.util.MediaStoreBuckets
+import com.dot.gallery.core.util.ext.captureDateMillis
 import com.dot.gallery.core.util.ext.copyToCancellable
+import com.dot.gallery.core.util.ext.isSupportedFormatForSavingAttributes
 import com.dot.gallery.core.util.ext.isVerifiedMediaCopy
 import com.dot.gallery.core.util.ext.mapAsResource
 import com.dot.gallery.core.util.ext.mediaDateModified
@@ -54,13 +59,18 @@ import com.dot.gallery.core.util.ext.saveRawImage
 import com.dot.gallery.core.util.ext.saveVideo
 import com.dot.gallery.core.util.ext.saveVideoStream
 import com.dot.gallery.core.util.ext.saveRawStream
+import com.dot.gallery.core.util.ext.updateCaptureDate
 import com.dot.gallery.core.util.ext.updateImageDescription
 import com.dot.gallery.core.util.ext.updateMedia
 import com.dot.gallery.core.util.ext.updateMediaExif
 import com.dot.gallery.core.workers.copyMedia
+import com.dot.gallery.core.workers.enqueueCaptureTimeIndex
 import com.dot.gallery.core.smart.SmartScanScheduler
 import com.dot.gallery.feature_node.data.data_source.CategoryWithMediaCount
 import com.dot.gallery.feature_node.data.data_source.InternalDatabase
+import com.dot.gallery.feature_node.data.data_source.MediaCaptureTimeEntity
+import com.dot.gallery.feature_node.data.data_source.applyTo
+import com.dot.gallery.feature_node.data.data_source.toEntity
 import com.dot.gallery.feature_node.data.data_source.SmartScanFeature
 import com.dot.gallery.feature_node.data.data_source.KeychainHolder
 import com.dot.gallery.feature_node.data.data_source.mediastore.MediaQuery
@@ -76,6 +86,7 @@ import com.dot.gallery.feature_node.domain.model.Collection
 import com.dot.gallery.feature_node.domain.model.CollectionMedia
 import com.dot.gallery.feature_node.domain.model.CollectionWithCount
 import com.dot.gallery.feature_node.domain.model.AlbumThumbnail
+import com.dot.gallery.feature_node.domain.model.CaptureTimeOrigin
 import com.dot.gallery.feature_node.domain.model.Category
 import com.dot.gallery.feature_node.domain.model.IgnoredAlbum
 import com.dot.gallery.feature_node.domain.model.ImageEmbedding
@@ -93,11 +104,14 @@ import com.dot.gallery.core.sandbox.IsolatedMetadataParser
 import com.dot.gallery.feature_node.domain.model.LockedAlbum
 import com.dot.gallery.feature_node.domain.model.MergedSubfolderAlbum
 import com.dot.gallery.feature_node.domain.model.PinnedAlbum
+import com.dot.gallery.feature_node.domain.model.ResolvedCaptureTime
 import com.dot.gallery.feature_node.domain.model.TimelineSettings
 import com.dot.gallery.feature_node.domain.model.Vault
 import com.dot.gallery.feature_node.domain.model.retrieveExtraMediaMetadata
 import com.dot.gallery.feature_node.domain.model.toMediaMetadata
 import com.dot.gallery.feature_node.domain.util.isCloud
+import com.dot.gallery.feature_node.domain.repository.CaptureDateEditCapability
+import com.dot.gallery.feature_node.domain.repository.CaptureDateEditResult
 import com.dot.gallery.feature_node.domain.repository.MediaMutationResult
 import com.dot.gallery.feature_node.domain.repository.MediaRepository
 import com.dot.gallery.feature_node.domain.util.MediaOrder
@@ -131,6 +145,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
@@ -138,6 +154,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -150,6 +167,21 @@ internal fun shouldUsePerFileMetadataIsolation(mode: String, bulk: Boolean): Boo
     Settings.Security.METADATA_ISOLATION_HYBRID -> !bulk
     else -> false
 }
+
+internal fun captureDateEditCapability(
+    editableLocalImage: Boolean,
+    canWriteMetadata: Boolean,
+    mimeType: String
+): CaptureDateEditCapability = when {
+    !editableLocalImage -> CaptureDateEditCapability.UNSUPPORTED
+    canWriteMetadata -> CaptureDateEditCapability.DIRECT_WRITE
+    mimeType.lowercase() in setOf("image/bmp", "image/x-bmp", "image/x-ms-bmp") ->
+        CaptureDateEditCapability.SAFE_COPY
+    else -> CaptureDateEditCapability.COPY_ONLY
+}
+
+internal fun canTrashOriginalAfterDatedCopy(capability: CaptureDateEditCapability): Boolean =
+    capability == CaptureDateEditCapability.SAFE_COPY
 
 internal fun combineCategoryThumbnails(
     local: List<UriMedia>,
@@ -184,6 +216,29 @@ class MediaRepositoryImpl(
 ) : MediaRepository {
 
     private val contentResolver = context.contentResolver
+    private val captureTimeIndexFlow: Flow<Map<Long, MediaCaptureTimeEntity>> = flow {
+        emit(emptyMap())
+        startupGate.awaitFirstContent()
+        emitAll(
+            database.getMediaCaptureTimeDao().observeAll()
+                .map { entries -> entries.associateBy(MediaCaptureTimeEntity::mediaId) }
+        )
+    }.distinctUntilChanged()
+
+    private fun Flow<List<UriMedia>>.withCaptureTimeIndex(): Flow<List<UriMedia>> =
+        combine(this, captureTimeIndexFlow) { media, index ->
+            media.map { item -> index[item.id]?.applyTo(item) ?: item }
+        }
+
+    private fun Resource<List<UriMedia>>.withCaptureTimeIndex(
+        index: Map<Long, MediaCaptureTimeEntity>
+    ): Resource<List<UriMedia>> {
+        val enriched = data?.map { item -> index[item.id]?.applyTo(item) ?: item }
+        return when (this) {
+            is Resource.Success -> Resource.Success(enriched.orEmpty())
+            is Resource.Error -> Resource.Error(message.orEmpty(), enriched)
+        }
+    }
 
     /**
      * Whether on-demand metadata operations should use per-file isolation.
@@ -226,35 +281,48 @@ class MediaRepositoryImpl(
         MediaOrder.Date(OrderType.Descending).sortMedia(media)
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    override fun getMedia(): Flow<Resource<List<UriMedia>>> = startupLoadFlow(
-        readCache = { startupCache.readMedia()?.let(::sortTimeline) },
-        boundedSource = {
-            sortTimeline(
-                MediaFlow(
-                    contentResolver = contentResolver,
-                    buckedId = MediaStoreBuckets.MEDIA_STORE_BUCKET_TIMELINE.id,
-                    skipBatching = true,
-                    queryLimit = STARTUP_MEDIA_LIMIT
-                ).flowData().first()
-            )
-        },
-        awaitFirstContent = startupGate::awaitFirstContent,
-        currentStamp = startupCache::currentStamp,
-        liveSource = MediaFlow(
-            contentResolver = contentResolver,
-            buckedId = MediaStoreBuckets.MEDIA_STORE_BUCKET_TIMELINE.id,
-            skipBatching = true
-        ).flowData().map(::sortTimeline),
-        writeCache = startupCache::writeMedia,
-        onLiveError = { printWarning("Startup media load failed (${it.javaClass.simpleName})") }
-    ).flowOn(Dispatchers.IO)
+    override fun getMedia(): Flow<Resource<List<UriMedia>>> {
+        val source = startupLoadFlow(
+            readCache = { startupCache.readMedia()?.let(::sortTimeline) },
+            boundedSource = {
+                sortTimeline(
+                    MediaFlow(
+                        contentResolver = contentResolver,
+                        buckedId = MediaStoreBuckets.MEDIA_STORE_BUCKET_TIMELINE.id,
+                        skipBatching = true,
+                        queryLimit = STARTUP_MEDIA_LIMIT
+                    ).flowData().first()
+                )
+            },
+            awaitFirstContent = startupGate::awaitFirstContent,
+            currentStamp = startupCache::currentStamp,
+            liveSource = MediaFlow(
+                contentResolver = contentResolver,
+                buckedId = MediaStoreBuckets.MEDIA_STORE_BUCKET_TIMELINE.id,
+                skipBatching = true
+            ).flowData()
+                .onEach { workManager.enqueueCaptureTimeIndex() }
+                .map(::sortTimeline),
+            writeCache = startupCache::writeMedia,
+            onLiveError = { printWarning("Startup media load failed (${it.javaClass.simpleName})") }
+        )
+        return combine(source, captureTimeIndexFlow) { resource, index ->
+            when (val enriched = resource.withCaptureTimeIndex(index)) {
+                is Resource.Success -> Resource.Success(sortTimeline(enriched.data.orEmpty()))
+                is Resource.Error -> Resource.Error(
+                    enriched.message.orEmpty(),
+                    enriched.data?.let(::sortTimeline)
+                )
+            }
+        }.flowOn(Dispatchers.IO)
+    }
 
     override fun getCompleteMedia(): Flow<Resource<List<UriMedia>>> =
         MediaFlow(
             contentResolver = contentResolver,
             buckedId = MediaStoreBuckets.MEDIA_STORE_BUCKET_TIMELINE.id,
             skipBatching = true
-        ).flowData().map {
+        ).flowData().withCaptureTimeIndex().map {
             Resource.Success(MediaOrder.Date(OrderType.Descending).sortMedia(it))
         }.flowOn(Dispatchers.IO)
 
@@ -267,7 +335,7 @@ class MediaRepositoryImpl(
                 BOTH -> MediaStoreBuckets.MEDIA_STORE_BUCKET_TIMELINE.id
             },
             mimeType = allowedMedia.toStringAny()
-        ).flowData().map {
+        ).flowData().withCaptureTimeIndex().map {
             Resource.Success(it)
         }.flowOn(Dispatchers.IO)
 
@@ -275,7 +343,7 @@ class MediaRepositoryImpl(
         MediaFlow(
             contentResolver = contentResolver,
             buckedId = MediaStoreBuckets.MEDIA_STORE_BUCKET_FAVORITES.id
-        ).flowData().map {
+        ).flowData().withCaptureTimeIndex().map {
             Resource.Success(it)
         }.flowOn(Dispatchers.IO)
 
@@ -283,7 +351,7 @@ class MediaRepositoryImpl(
         MediaFlow(
             contentResolver = contentResolver,
             buckedId = MediaStoreBuckets.MEDIA_STORE_BUCKET_TRASH.id
-        ).flowData().map { Resource.Success(it) }.flowOn(Dispatchers.IO)
+        ).flowData().withCaptureTimeIndex().map { Resource.Success(it) }.flowOn(Dispatchers.IO)
 
     override fun getAlbums(mediaOrder: MediaOrder): Flow<Resource<List<Album>>> = startupLoadFlow(
         readCache = { startupCache.readAlbums() },
@@ -326,7 +394,7 @@ class MediaRepositoryImpl(
                     buckedId = MediaStoreBuckets.MEDIA_STORE_BUCKET_TIMELINE.id,
                     skipBatching = true,
                     mediaIds = localIds.toSet()
-                ).flowData()
+                ).flowData().withCaptureTimeIndex()
             }
         val cloudFlow: Flow<List<CloudMediaEntity>> =
             if (cloudIds.isEmpty()) {
@@ -435,7 +503,7 @@ class MediaRepositoryImpl(
         buckedId = albumIds.firstOrNull() ?: MediaStoreBuckets.MEDIA_STORE_BUCKET_PLACEHOLDER.id,
         skipBatching = skipBatching,
         bucketIds = albumIds
-    ).flowData().mapAsResource()
+    ).flowData().withCaptureTimeIndex().mapAsResource()
 
     override fun getMediaByAlbumIdWithType(
         albumId: Long,
@@ -445,7 +513,7 @@ class MediaRepositoryImpl(
             contentResolver = contentResolver,
             buckedId = albumId,
             mimeType = allowedMedia.toStringAny()
-        ).flowData().mapAsResource()
+        ).flowData().withCaptureTimeIndex().mapAsResource()
 
     override fun getAlbumsWithType(allowedMedia: AllowedMedia): Flow<Resource<List<Album>>> =
         AlbumsFlow(
@@ -462,7 +530,8 @@ class MediaRepositoryImpl(
             contentResolver = contentResolver,
             uris = listOfUris,
             onlyMatchingUris = onlyMatching
-        ).flowData().mapAsResource(errorOnEmpty = true, errorMessage = "Media could not be opened")
+        ).flowData().withCaptureTimeIndex()
+            .mapAsResource(errorOnEmpty = true, errorMessage = "Media could not be opened")
 
     private suspend fun <T : Media> mutateMediaDirectly(
         mediaList: List<T>,
@@ -800,6 +869,125 @@ class MediaRepositoryImpl(
             media,
             shouldUsePerFileIsolation()
         )?.let(database.getMetadataDao()::addMetadata)
+    }
+
+    override suspend fun probeCaptureDateEdit(media: Media): CaptureDateEditCapability =
+        withContext(Dispatchers.IO) {
+            val local = media as? UriMedia ?: return@withContext CaptureDateEditCapability.UNSUPPORTED
+            val editableLocalImage = local.isImage &&
+                local.uri.scheme == ContentResolver.SCHEME_CONTENT &&
+                local.uri.authority == MediaStore.AUTHORITY
+            if (!editableLocalImage) return@withContext CaptureDateEditCapability.UNSUPPORTED
+            val canWrite = runCatching {
+                contentResolver.openFileDescriptor(local.uri, "r")?.use {
+                    ExifInterface(it.fileDescriptor).isSupportedFormatForSavingAttributes
+                } == true
+            }.getOrDefault(false)
+            captureDateEditCapability(
+                editableLocalImage = editableLocalImage,
+                canWriteMetadata = canWrite,
+                mimeType = local.mimeType
+            )
+        }
+
+    override suspend fun updateMediaCaptureDate(
+        media: Media,
+        timestampMillis: Long
+    ): CaptureDateEditResult = withContext(Dispatchers.IO) {
+        val local = media as? UriMedia
+            ?: return@withContext CaptureDateEditResult.Failed("Capture date editing is unavailable")
+        val capability = probeCaptureDateEdit(local)
+        if (capability != CaptureDateEditCapability.DIRECT_WRITE) {
+            return@withContext CaptureDateEditResult.NeedsCopy(capability)
+        }
+        val updated = context.updateMediaExif(
+            media = local,
+            action = { updateCaptureDate(timestampMillis) },
+            postAction = { updatedMedia ->
+                val current = updatedMedia.copy(
+                    timestamp = contentResolver.mediaDateModified(updatedMedia.uri)
+                        .takeIf { it != 0L } ?: updatedMedia.timestamp,
+                    size = contentResolver.mediaSize(updatedMedia.uri)
+                        .takeIf { it != 0L } ?: updatedMedia.size
+                )
+                database.getMediaCaptureTimeDao().upsertAll(
+                    listOf(
+                        ResolvedCaptureTime(
+                            timestampMillis = timestampMillis,
+                            origin = CaptureTimeOrigin.EMBEDDED_IMAGE
+                        ).toEntity(current, System.currentTimeMillis())
+                    )
+                )
+                context.retrieveExtraMediaMetadata(
+                    isolatedParser,
+                    geocoder,
+                    current,
+                    shouldUsePerFileIsolation()
+                )?.let(database.getMetadataDao()::addMetadata)
+            }
+        )
+        if (!updated) return@withContext CaptureDateEditResult.Failed("Unable to write capture date")
+        val verified = runCatching {
+            contentResolver.openFileDescriptor(local.uri, "r")?.use {
+                ExifInterface(it.fileDescriptor).captureDateMillis()
+            }?.let { kotlin.math.abs(it - timestampMillis) < 1_000L } == true
+        }.getOrDefault(false)
+        if (!verified) return@withContext CaptureDateEditResult.Failed("Capture date verification failed")
+        workManager.enqueueCaptureTimeIndex()
+        CaptureDateEditResult.Updated
+    }
+
+    override suspend fun createDatedCopy(
+        media: Media,
+        timestampMillis: Long
+    ): CaptureDateEditResult = withContext(Dispatchers.IO) {
+        val local = media as? UriMedia
+            ?: return@withContext CaptureDateEditResult.Failed("Dated copy is unavailable")
+        val capability = probeCaptureDateEdit(local)
+        if (capability == CaptureDateEditCapability.DIRECT_WRITE ||
+            capability == CaptureDateEditCapability.UNSUPPORTED
+        ) return@withContext CaptureDateEditResult.Failed("Dated copy is unavailable")
+
+        val bitmap = runCatching {
+            ImageDecoder.decodeBitmap(ImageDecoder.createSource(contentResolver, local.uri)) { decoder, _, _ ->
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            }
+        }.getOrNull() ?: return@withContext CaptureDateEditResult.Failed("Unable to decode a dated copy")
+        val baseName = local.label.substringBeforeLast('.', local.label)
+        val targetUri = try {
+            contentResolver.saveImageEncoded(
+                bitmap = bitmap,
+                writeFormat = ImageReencoder.ImageWriteFormat.PNG,
+                config = ImageReencoder.ReencodeConfig(),
+                mimeType = "image/png",
+                relativePath = local.relativePath,
+                displayName = "${baseName}_dated_${System.currentTimeMillis()}.png"
+            )
+        } finally {
+            if (!bitmap.isRecycled) bitmap.recycle()
+        } ?: return@withContext CaptureDateEditResult.Failed("Unable to create a dated copy")
+
+        val written = runCatching {
+            contentResolver.openFileDescriptor(targetUri, "rw")?.use {
+                ExifInterface(it.fileDescriptor).apply {
+                    updateCaptureDate(timestampMillis)
+                    saveAttributes()
+                }
+            } ?: error("Dated copy descriptor unavailable")
+            contentResolver.openFileDescriptor(targetUri, "r")?.use {
+                ExifInterface(it.fileDescriptor).captureDateMillis()
+            }?.let { kotlin.math.abs(it - timestampMillis) < 1_000L } == true
+        }.getOrDefault(false)
+        if (!written) {
+            runCatching { contentResolver.delete(targetUri, null, null) }
+            return@withContext CaptureDateEditResult.Failed("Dated copy verification failed")
+        }
+        contentResolver.notifyChange(targetUri, null)
+        workManager.enqueueCaptureTimeIndex()
+        CaptureDateEditResult.CopyCreated(
+            uri = targetUri,
+            canTrashOriginal = canTrashOriginalAfterDatedCopy(capability)
+        )
     }
 
     override suspend fun <T : Media> updateMediaDescription(

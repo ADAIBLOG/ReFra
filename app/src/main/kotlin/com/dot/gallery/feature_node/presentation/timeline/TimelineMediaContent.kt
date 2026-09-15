@@ -239,6 +239,7 @@ fun TimelineMediaContent(
                     columns = currentColumns,
                     allowHeaders = timelineGroupByDate,
                     leadingItemCount = if (aboveGridContent != null) 1 else 0,
+                    dateSource = mediaState.value.dateSource,
                 ),
                 headers = headers,
                 state = mosaicGridState,

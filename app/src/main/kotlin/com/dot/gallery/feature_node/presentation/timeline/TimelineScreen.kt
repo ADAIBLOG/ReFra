@@ -59,11 +59,14 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import com.dot.gallery.feature_node.presentation.common.components.GridPinchZoomLayout
 import com.dot.gallery.feature_node.presentation.common.components.rememberGridPinchZoomState
 import com.dot.gallery.core.Constants.Animation.enterAnimation
@@ -72,6 +75,7 @@ import com.dot.gallery.core.Constants.cellsList
 import com.dot.gallery.core.LocalEventHandler
 import com.dot.gallery.core.LocalMediaDistributor
 import com.dot.gallery.core.LocalMediaSelector
+import com.dot.gallery.core.LocalScrollToTop
 import com.dot.gallery.core.ScrollToTopHandler
 import com.dot.gallery.core.animateOrJumpToTop
 import com.dot.gallery.BuildConfig
@@ -85,11 +89,15 @@ import com.dot.gallery.core.Settings.Misc.rememberShowFilterButton
 import com.dot.gallery.core.Settings.Misc.rememberTimelineGroupByDate
 import com.dot.gallery.core.Settings.Misc.rememberTimelineGroupMethod
 import com.dot.gallery.core.Settings.Misc.rememberTimelineLayoutType
+import com.dot.gallery.core.Settings.Misc.rememberTimelineSort
 import com.dot.gallery.core.navigate
 import com.dot.gallery.core.presentation.components.EmptyMedia
+import com.dot.gallery.core.presentation.components.FilterKind
 import com.dot.gallery.core.presentation.components.SelectionSheet
 import com.dot.gallery.core.startup.LocalStartupWorkGate
 import com.dot.gallery.core.startup.StartupContentEffect
+import com.dot.gallery.core.workers.CAPTURE_TIME_INDEX_PROGRESS
+import com.dot.gallery.core.workers.CAPTURE_TIME_INDEX_WORK
 import com.dot.gallery.feature_node.domain.model.Album
 import com.dot.gallery.feature_node.domain.model.AlbumState
 import com.dot.gallery.feature_node.domain.model.Media
@@ -98,7 +106,9 @@ import com.dot.gallery.feature_node.domain.model.MediaState
 import com.dot.gallery.feature_node.domain.model.MediaTypeFilter
 import com.dot.gallery.feature_node.domain.model.TimelineFilter
 import com.dot.gallery.feature_node.domain.model.isHeaderKey
+import com.dot.gallery.feature_node.domain.model.timestampFor
 import com.dot.gallery.feature_node.domain.model.isIgnoredKey
+import com.dot.gallery.feature_node.domain.util.OrderType
 import com.dot.gallery.feature_node.domain.util.isFavorite
 import com.dot.gallery.feature_node.domain.util.isImage
 import com.dot.gallery.feature_node.domain.util.isVideo
@@ -181,13 +191,25 @@ fun TimelineScreen(
     animatedContentScope: AnimatedContentScope,
 ) {
     val eventHandler = LocalEventHandler.current
+    val scrollToTop = LocalScrollToTop.current
     val distributor = LocalMediaDistributor.current
     val isRefreshing by distributor.isRefreshing.collectAsStateWithLifecycle()
     val refreshScope = rememberCoroutineScope()
 
     // Filter state
     var timelineFilter by remember { mutableStateOf(TimelineFilter()) }
+    var timelineSort by rememberTimelineSort()
     val filterSheetState = rememberAppBottomSheetState()
+    val context = LocalContext.current
+    val captureTimeWork = remember(context) {
+        WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(CAPTURE_TIME_INDEX_WORK)
+    }.collectAsStateWithLifecycle(initialValue = emptyList())
+    val activeCaptureTimeWork = captureTimeWork.value.lastOrNull {
+        it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.BLOCKED ||
+            it.state == WorkInfo.State.RUNNING
+    }
+    val captureTimeIndexProgress = activeCaptureTimeWork?.progress
+        ?.getInt(CAPTURE_TIME_INDEX_PROGRESS, 0)
 
     val startupGate = LocalStartupWorkGate.current
     val filterAlbumsFlow = remember(startupGate, distributor) {
@@ -213,7 +235,7 @@ fun TimelineScreen(
     val availableYears by rememberedDerivedState(mediaState.value) {
         val cal = java.util.Calendar.getInstance()
         mediaState.value.media.mapTo(mutableSetOf()) { media ->
-            cal.timeInMillis = media.definedTimestamp * 1000L
+            cal.timeInMillis = media.timestampFor(mediaState.value.dateSource) * 1000L
             cal.get(java.util.Calendar.YEAR)
         }.sortedDescending()
     }
@@ -256,7 +278,7 @@ fun TimelineScreen(
             isImage = { it.isImage },
             isVideo = { it.isVideo },
             isFavorite = { it.isFavorite },
-            timestampSeconds = { it.definedTimestamp },
+            timestampSeconds = { it.timestampFor(source.dateSource) },
             albumId = { it.albumID },
         )
         val filteredIds = filtered.mapTo(HashSet(filtered.size)) { it.id }
@@ -272,6 +294,7 @@ fun TimelineScreen(
             defaultDateFormat = dateFormats.first,
             extendedDateFormat = dateFormats.second,
             weeklyDateFormat = dateFormats.third,
+            dateSource = source.dateSource,
         ).copy(isLoading = source.isLoading)
     }
     StartupContentEffect(
@@ -352,11 +375,13 @@ fun TimelineScreen(
                                 ) {
                                     Icon(
                                         imageVector = Icons.Outlined.FilterList,
-                                        contentDescription = stringResource(R.string.filter),
+                                        contentDescription = stringResource(R.string.sort_and_filter),
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                                if (timelineFilter.isActive) {
+                                if (timelineFilter.isActive || timelineSort.kind != FilterKind.DATE ||
+                                    timelineSort.orderType != OrderType.Descending
+                                ) {
                                     Badge(
                                         modifier = Modifier
                                             .align(Alignment.TopEnd)
@@ -410,8 +435,15 @@ fun TimelineScreen(
     TimelineFilterSheet(
         sheetState = filterSheetState,
         currentFilter = timelineFilter,
+        currentSort = timelineSort,
         availableYears = availableYears,
         availableAlbums = availableAlbums,
-        onApply = { newFilter -> timelineFilter = newFilter }
+        indexProgress = captureTimeIndexProgress,
+        onApply = { newFilter, newSort ->
+            val sortChanged = newSort != timelineSort
+            timelineFilter = newFilter
+            timelineSort = newSort
+            if (sortChanged) scrollToTop.requestScrollToTop(Screen.TimelineScreen.route)
+        }
     )
 }

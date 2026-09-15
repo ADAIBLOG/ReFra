@@ -15,6 +15,7 @@ import com.dot.gallery.cloud.core.ProviderType
 import com.dot.gallery.cloud.core.SyncState
 import com.dot.gallery.cloud.core.cloudMediaId
 import com.dot.gallery.core.Constants
+import com.dot.gallery.feature_node.domain.model.CaptureTimeOrigin
 import com.dot.gallery.feature_node.domain.model.Media
 import com.dot.gallery.feature_node.presentation.util.getCurrentAndroid
 import com.dot.gallery.feature_node.presentation.util.getDate
@@ -123,6 +124,11 @@ data class CloudMediaEntity(
             albumLabel = displayName,
             timestamp = timestampSeconds,
             takenTimestamp = takenTimestamp,
+            captureTimeOrigin = if (takenTimestamp != null) {
+                CaptureTimeOrigin.CLOUD_PROVIDER
+            } else {
+                CaptureTimeOrigin.MODIFIED_FALLBACK
+            },
             fullDate = fullDate ?: displayDateSeconds.getDate(Constants.EXTENDED_DATE_FORMAT),
             mimeType = mimeType,
             favorite = if (favorite) 1 else 0,

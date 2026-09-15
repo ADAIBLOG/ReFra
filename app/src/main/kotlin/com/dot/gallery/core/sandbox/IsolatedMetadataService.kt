@@ -26,6 +26,7 @@ import com.drew.metadata.mov.media.QuickTimeVideoDirectory
 import com.drew.metadata.mp4.media.Mp4VideoDirectory
 import com.drew.metadata.xmp.XmpDirectory
 import com.drew.metadata.xmp.XmpReader
+import com.dot.gallery.feature_node.domain.model.parseCaptureTimestamp
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.FileInputStream
@@ -235,6 +236,21 @@ class IsolatedMetadataService : Service() {
                     ?.let { result.putInt(KEY_IMAGE_HEIGHT, it) }
         }
 
+        if (!result.containsKey(KEY_DATETIME_ORIGINAL)) {
+            meta.getDirectoriesOfType(ExifIFD0Directory::class.java)
+                .firstNotNullOfOrNull { it.getString(ExifIFD0Directory.TAG_DATETIME) }
+                ?.let { result.putString(KEY_DATETIME_ORIGINAL, it) }
+        }
+        result.getString(KEY_DATETIME_ORIGINAL)?.let { rawDate ->
+            val offset = meta.directories.asSequence()
+                .flatMap { it.tags.asSequence() }
+                .firstOrNull { it.tagName.equals("Offset Time Original", ignoreCase = true) }
+                ?.description
+            parseCaptureTimestamp(rawDate, offset)?.let {
+                result.putLong(KEY_CAPTURE_TIMESTAMP_MILLIS, it)
+            }
+        }
+
         // GPS
         meta.getDirectoriesOfType(GpsDirectory::class.java).forEach { dir ->
             dir.geoLocation?.let {
@@ -329,6 +345,11 @@ class IsolatedMetadataService : Service() {
                     ?.toIntOrNull()?.let { result.putInt(KEY_VIDEO_HEIGHT, it) }
                 retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)
                     ?.toIntOrNull()?.let { result.putInt(KEY_BIT_RATE, it) }
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)?.let { rawDate ->
+                    parseCaptureTimestamp(rawDate)?.let {
+                        result.putLong(KEY_CAPTURE_TIMESTAMP_MILLIS, it)
+                    }
+                }
 
                 val frameRate = retriever
                     .extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)
@@ -345,10 +366,12 @@ class IsolatedMetadataService : Service() {
                 retriever.release()
             }
 
-            // ── 2) metadata-extractor fallback for dimensions ─────────────
+            // ── 2) metadata-extractor fallback for dimensions and capture time ──
             // Recovers width/height from the QuickTime/MP4 video track when the
             // retriever failed or omitted them. Rewind the shared descriptor first.
-            if (!result.containsKey(KEY_VIDEO_WIDTH) || !result.containsKey(KEY_VIDEO_HEIGHT)) {
+            if (!result.containsKey(KEY_VIDEO_WIDTH) || !result.containsKey(KEY_VIDEO_HEIGHT) ||
+                !result.containsKey(KEY_CAPTURE_TIMESTAMP_MILLIS)
+            ) {
                 runCatching {
                     Os.lseek(fd.fileDescriptor, 0, OsConstants.SEEK_SET)
                     FileInputStream(fd.fileDescriptor).use { stream ->
@@ -368,6 +391,16 @@ class IsolatedMetadataService : Service() {
                             if (!result.containsKey(KEY_VIDEO_HEIGHT))
                                 dir.getInteger(Mp4VideoDirectory.TAG_HEIGHT)
                                     ?.takeIf { it > 0 }?.let { result.putInt(KEY_VIDEO_HEIGHT, it) }
+                        }
+                        if (!result.containsKey(KEY_CAPTURE_TIMESTAMP_MILLIS)) {
+                            meta.directories.asSequence()
+                                .flatMap { it.tags.asSequence() }
+                                .filter {
+                                    it.tagName.contains("creation", ignoreCase = true) ||
+                                        it.tagName.contains("date/time original", ignoreCase = true)
+                                }
+                                .firstNotNullOfOrNull { parseCaptureTimestamp(it.description) }
+                                ?.let { result.putLong(KEY_CAPTURE_TIMESTAMP_MILLIS, it) }
                         }
                     }
                 }
@@ -547,6 +580,7 @@ class IsolatedMetadataService : Service() {
         // Bundle keys — output (image EXIF)
         const val KEY_IMAGE_DESCRIPTION = "image_description"
         const val KEY_DATETIME_ORIGINAL = "datetime_original"
+        const val KEY_CAPTURE_TIMESTAMP_MILLIS = "capture_timestamp_millis"
         const val KEY_MANUFACTURER = "manufacturer"
         const val KEY_MODEL = "model"
         const val KEY_APERTURE = "aperture"

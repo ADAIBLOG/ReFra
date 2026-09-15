@@ -29,6 +29,8 @@ import com.dot.gallery.feature_node.domain.util.getUri
 import com.dot.gallery.feature_node.domain.util.isCloud
 import com.dot.gallery.feature_node.domain.model.Media
 import com.dot.gallery.feature_node.domain.model.Vault
+import com.dot.gallery.feature_node.domain.repository.CaptureDateEditCapability
+import com.dot.gallery.feature_node.domain.repository.CaptureDateEditResult
 import com.dot.gallery.feature_node.domain.repository.MediaMutationResult
 import com.dot.gallery.feature_node.domain.repository.MediaRepository
 import kotlinx.coroutines.Dispatchers
@@ -199,6 +201,19 @@ class MediaHandlerImpl @Inject constructor(
         mode: MetadataRemovalMode,
         saveMode: MetadataSaveMode
     ): SanitizationResult = repository.sanitizeMediaMetadata(media, mode, saveMode)
+
+    override suspend fun probeCaptureDateEdit(media: Media): CaptureDateEditCapability =
+        repository.probeCaptureDateEdit(media)
+
+    override suspend fun updateMediaCaptureDate(
+        media: Media,
+        timestampMillis: Long
+    ): CaptureDateEditResult = repository.updateMediaCaptureDate(media, timestampMillis)
+
+    override suspend fun createDatedCopy(
+        media: Media,
+        timestampMillis: Long
+    ): CaptureDateEditResult = repository.createDatedCopy(media, timestampMillis)
 
     override suspend fun <T : Media> updateMediaDescription(
         media: T,

@@ -11,6 +11,8 @@ import com.dot.gallery.core.metadata.SanitizationCapability
 import com.dot.gallery.core.metadata.SanitizationResult
 import com.dot.gallery.feature_node.domain.model.Media
 import com.dot.gallery.feature_node.domain.model.Vault
+import com.dot.gallery.feature_node.domain.repository.CaptureDateEditCapability
+import com.dot.gallery.feature_node.domain.repository.CaptureDateEditResult
 import com.dot.gallery.feature_node.domain.repository.MediaMutationResult
 import kotlinx.coroutines.flow.Flow
 import java.util.UUID
@@ -62,6 +64,12 @@ interface MediaHandler {
         mode: MetadataRemovalMode,
         saveMode: MetadataSaveMode
     ): SanitizationResult
+
+    suspend fun probeCaptureDateEdit(media: Media): CaptureDateEditCapability
+
+    suspend fun updateMediaCaptureDate(media: Media, timestampMillis: Long): CaptureDateEditResult
+
+    suspend fun createDatedCopy(media: Media, timestampMillis: Long): CaptureDateEditResult
 
     suspend fun <T: Media> updateMediaDescription(media: T, description: String): Boolean
 

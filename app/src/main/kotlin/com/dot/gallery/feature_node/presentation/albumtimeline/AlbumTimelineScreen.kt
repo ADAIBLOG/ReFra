@@ -303,6 +303,7 @@ fun AlbumTimelineScreen(
                         columns = currentColumns,
                         allowHeaders = albumGroupByDate,
                         leadingItemCount = if (showMergeContent) 1 else 0,
+                        dateSource = mediaState.value.dateSource,
                     ),
                     headers = headers,
                     state = mosaicGridState,

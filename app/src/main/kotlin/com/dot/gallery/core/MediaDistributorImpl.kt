@@ -35,6 +35,7 @@ import com.dot.gallery.feature_node.domain.model.MediaTypeAlbum
 import com.dot.gallery.feature_node.domain.model.LockedAlbum
 import com.dot.gallery.feature_node.domain.model.MergedSubfolderAlbum
 import com.dot.gallery.feature_node.domain.model.PinnedAlbum
+import com.dot.gallery.feature_node.domain.model.TimelineDateSource
 import com.dot.gallery.feature_node.domain.model.TimelineSettings
 import com.dot.gallery.feature_node.domain.model.UIEvent
 import com.dot.gallery.feature_node.domain.model.Vault
@@ -132,6 +133,19 @@ internal fun matchingLocationMediaIds(
 internal fun usesLiveCloudAlbumMembership(providerType: ProviderType): Boolean =
     providerType == ProviderType.SMB || providerType == ProviderType.NFS
 
+private fun Settings.Album.LastSort.toMediaOrder(): MediaOrder = when (kind) {
+    FilterKind.DATE -> MediaOrder.Date(orderType)
+    FilterKind.DATE_MODIFIED -> MediaOrder.DateModified(orderType)
+    FilterKind.NAME -> MediaOrder.Label(orderType)
+}
+
+private val Settings.Album.LastSort.dateSource: TimelineDateSource
+    get() = if (kind == FilterKind.DATE_MODIFIED) {
+        TimelineDateSource.MODIFIED_TIME
+    } else {
+        TimelineDateSource.CAPTURE_TIME
+    }
+
 internal fun expandLocationMediaIds(
     matchingMediaIds: Set<Long>,
     cloudBackupIdsByLocalId: Map<Long, List<Long>>,
@@ -212,6 +226,11 @@ class MediaDistributorImpl @Inject constructor(
      */
     private val albumMediaSortFlow: StateFlow<Settings.Album.LastSort> = 
         Settings.Album.getAlbumMediaSortFlow(context)
+            .distinctUntilChanged()
+            .stateIn(appScope, SharingStarted.Eagerly, Settings.Album.LastSort(OrderType.Descending, FilterKind.DATE))
+
+    private val timelineSortFlow: StateFlow<Settings.Album.LastSort> =
+        Settings.Misc.getTimelineSortFlow(context)
             .distinctUntilChanged()
             .stateIn(appScope, SharingStarted.Eagerly, Settings.Album.LastSort(OrderType.Descending, FilterKind.DATE))
 
@@ -855,7 +874,8 @@ class MediaDistributorImpl @Inject constructor(
                     enabledGroupTypes = emptySet(),
                     defaultDateFormat = dateFormatsFlow.value.first,
                     extendedDateFormat = dateFormatsFlow.value.second,
-                    weeklyDateFormat = dateFormatsFlow.value.third
+                    weeklyDateFormat = dateFormatsFlow.value.third,
+                    dateSource = timelineState.dateSource
                 )
             }
     }
@@ -905,11 +925,7 @@ class MediaDistributorImpl @Inject constructor(
                         }
                         val error = if (resource is Resource.Error) resource.message ?: "" else ""
                         val (defaultDateFormat, extendedDateFormat, weeklyDateFormat) = dateFormats
-                        val sorter = when (albumSort.kind) {
-                            FilterKind.DATE -> MediaOrder.Date(albumSort.orderType)
-                            FilterKind.DATE_MODIFIED -> MediaOrder.DateModified(albumSort.orderType)
-                            FilterKind.NAME -> MediaOrder.Label(albumSort.orderType)
-                        }
+                        val sorter = albumSort.toMediaOrder()
                         mapMediaToItem(
                             data = sorter.sortMedia(media),
                             error = error,
@@ -918,7 +934,8 @@ class MediaDistributorImpl @Inject constructor(
                             groupByYear = settings?.groupTimelineByYear == true,
                             defaultDateFormat = defaultDateFormat,
                             extendedDateFormat = extendedDateFormat,
-                            weeklyDateFormat = weeklyDateFormat
+                            weeklyDateFormat = weeklyDateFormat,
+                            dateSource = albumSort.dateSource
                         )
                     }
                 }
@@ -945,11 +962,7 @@ class MediaDistributorImpl @Inject constructor(
                     CloudAlbumMemberId(providerType, configId, remoteId) !in memberIds
             }
             val (defaultDateFormat, extendedDateFormat, weeklyDateFormat) = dateFormats
-            val sorter = when (albumSort.kind) {
-                FilterKind.DATE -> MediaOrder.Date(albumSort.orderType)
-                FilterKind.DATE_MODIFIED -> MediaOrder.DateModified(albumSort.orderType)
-                FilterKind.NAME -> MediaOrder.Label(albumSort.orderType)
-            }
+            val sorter = albumSort.toMediaOrder()
             mapMediaToItem(
                 data = sorter.sortMedia(unsortedMedia),
                 error = "",
@@ -958,7 +971,8 @@ class MediaDistributorImpl @Inject constructor(
                 groupByYear = settings?.groupTimelineByYear == true,
                 defaultDateFormat = defaultDateFormat,
                 extendedDateFormat = extendedDateFormat,
-                weeklyDateFormat = weeklyDateFormat
+                weeklyDateFormat = weeklyDateFormat,
+                dateSource = albumSort.dateSource
             )
         }
 
@@ -1016,11 +1030,7 @@ class MediaDistributorImpl @Inject constructor(
 
                     val (defaultDateFormat, extendedDateFormat, weeklyDateFormat) = dateFormats
 
-                    val sorter = when (albumSort.kind) {
-                        FilterKind.DATE -> MediaOrder.Date(albumSort.orderType)
-                        FilterKind.DATE_MODIFIED -> MediaOrder.DateModified(albumSort.orderType)
-                        FilterKind.NAME -> MediaOrder.Label(albumSort.orderType)
-                    }
+                    val sorter = albumSort.toMediaOrder()
 
                     val filtered = (mediaResult.data ?: emptyList()).toMutableList().apply {
                         removeAll { media -> blacklistedAlbums.any { it.shouldIgnore(media, albumId) } }
@@ -1035,7 +1045,8 @@ class MediaDistributorImpl @Inject constructor(
                         enabledGroupTypes = groupTypes,
                         defaultDateFormat = defaultDateFormat,
                         extendedDateFormat = extendedDateFormat,
-                        weeklyDateFormat = weeklyDateFormat
+                        weeklyDateFormat = weeklyDateFormat,
+                        dateSource = albumSort.dateSource
                     )
                 }
             }
@@ -1086,6 +1097,8 @@ class MediaDistributorImpl @Inject constructor(
                 .onEach { StartupTracer.begin("$tag.dep.dateFormats").also { s -> StartupTracer.end(s) } },
             albumMediaSortFlow
                 .onEach { StartupTracer.begin("$tag.dep.albumMediaSort").also { s -> StartupTracer.end(s) } },
+            timelineSortFlow
+                .onEach { StartupTracer.begin("$tag.dep.timelineSort").also { s -> StartupTracer.end(s) } },
             groupSimilarMedia
                 .onEach { StartupTracer.begin("$tag.dep.groupSimilar=$it").also { s -> StartupTracer.end(s) } },
             enabledGroupTypes
@@ -1108,11 +1121,12 @@ class MediaDistributorImpl @Inject constructor(
             @Suppress("UNCHECKED_CAST")
             val dateFormats = values[4] as Triple<String, String, String>
             val albumSort = values[5] as Settings.Album.LastSort
-            val shouldGroupSimilar = values[6] as Boolean
+            val timelineSort = values[6] as Settings.Album.LastSort
+            val shouldGroupSimilar = values[7] as Boolean
             @Suppress("UNCHECKED_CAST")
-            val groupTypes = values[7] as Set<MediaGroupType>
+            val groupTypes = values[8] as Set<MediaGroupType>
             @Suppress("UNCHECKED_CAST")
-            val cloudMedia = values[8] as List<Media.UriMedia>
+            val cloudMedia = values[9] as List<Media.UriMedia>
             
             val (defaultDateFormat, extendedDateFormat, weeklyDateFormat) = dateFormats
             
@@ -1123,16 +1137,14 @@ class MediaDistributorImpl @Inject constructor(
                     isLoading = false
                 )
             }
-            // Use custom sort for album timelines, default sort for favorites/trash
-            val sorter = if (target == null && albumId > 0) {
-                when (albumSort.kind) {
-                    FilterKind.DATE -> MediaOrder.Date(albumSort.orderType)
-                    FilterKind.DATE_MODIFIED -> MediaOrder.DateModified(albumSort.orderType)
-                    FilterKind.NAME -> MediaOrder.Label(albumSort.orderType)
-                }
-            } else {
-                MediaOrder.Default
+            // Use custom sort for timeline/album media, default sort for favorites/trash
+            val activeSort = when {
+                isMainTimeline -> timelineSort
+                target == null && albumId > 0 -> albumSort
+                else -> null
             }
+            val sorter = activeSort?.toMediaOrder() ?: MediaOrder.Default
+            val dateSource = activeSort?.dateSource ?: TimelineDateSource.CAPTURE_TIME
             val lockedAlbumIds = lockedAlbums.mapTo(HashSet()) { it.id }
             val data = (result.data ?: emptyList()).toMutableList().apply {
                 removeAll { media -> blacklistedAlbums.any { it.shouldIgnore(media, albumId) } }
@@ -1181,7 +1193,8 @@ class MediaDistributorImpl @Inject constructor(
                 cloudBackups = cloudBackups,
                 defaultDateFormat = defaultDateFormat,
                 extendedDateFormat = extendedDateFormat,
-                weeklyDateFormat = weeklyDateFormat
+                weeklyDateFormat = weeklyDateFormat,
+                dateSource = dateSource
             )
             StartupTracer.end(mapSpan)
             StartupTracer.end(combineSpan)
@@ -1430,11 +1443,7 @@ class MediaDistributorImpl @Inject constructor(
             val mediaIdSet = mediaIds.toHashSet()
             val collectionMedia = allMedia.filter { it.id in mediaIdSet }
 
-            val sorter = when (albumSort.kind) {
-                FilterKind.DATE -> MediaOrder.Date(albumSort.orderType)
-                FilterKind.DATE_MODIFIED -> MediaOrder.DateModified(albumSort.orderType)
-                FilterKind.NAME -> MediaOrder.Label(albumSort.orderType)
-            }
+            val sorter = albumSort.toMediaOrder()
 
             mapMediaToItem(
                 data = sorter.sortMedia(collectionMedia),
@@ -1446,7 +1455,8 @@ class MediaDistributorImpl @Inject constructor(
                 enabledGroupTypes = groupTypes,
                 defaultDateFormat = defaultDateFormat,
                 extendedDateFormat = extendedDateFormat,
-                weeklyDateFormat = weeklyDateFormat
+                weeklyDateFormat = weeklyDateFormat,
+                dateSource = albumSort.dateSource
             )
         }.stateIn(appScope, sharingMethod, MediaState())
 

@@ -79,6 +79,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.pluralStringResource
@@ -112,7 +113,10 @@ import com.dot.gallery.core.Settings.Misc.rememberGroupEditedCopies
 import com.dot.gallery.core.Settings.Misc.rememberGroupRawJpg
 import com.dot.gallery.core.Settings.Misc.rememberGroupSimilarMedia
 import com.dot.gallery.core.Settings.Misc.rememberTimelineLayoutType
+import com.dot.gallery.core.Settings.Misc.rememberTimelineSort
 import com.dot.gallery.core.SettingsEntity
+import com.dot.gallery.core.presentation.components.FilterKind
+import com.dot.gallery.core.workers.enqueueCaptureTimeIndex
 import com.dot.gallery.feature_node.presentation.settings.components.SettingsItem
 import com.dot.gallery.core.navigate
 import com.dot.gallery.core.util.SdkCompat
@@ -137,9 +141,12 @@ import com.dot.gallery.feature_node.presentation.util.AppBottomSheetState
 import com.dot.gallery.feature_node.presentation.util.rememberAppBottomSheetState
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.work.WorkManager
+import com.dot.gallery.feature_node.domain.util.OrderType
 import kotlinx.coroutines.launch
 
 private const val DETAIL_TIMELINE_LAYOUT = "timeline_layout"
+private const val DETAIL_TIMELINE_ORDER = "timeline_order"
 private const val DETAIL_GROUP_SIMILAR = "group_similar"
 private const val DETAIL_GIF_ANIMATION = "gif_animation"
 private const val DETAIL_FILTER_BUTTON = "filter_button"
@@ -156,11 +163,13 @@ fun SettingsTimelineAlbumsScreen() {
     var detailKey by rememberSaveable { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val eventHandler = LocalEventHandler.current
+    val context = LocalContext.current
     val listState = rememberLazyListState()
 
     var groupByMonth by Settings.Misc.rememberTimelineGroupByMonth()
     var groupByYear by Settings.Misc.rememberTimelineGroupByYear()
     var timelineLayoutType by rememberTimelineLayoutType()
+    var timelineSort by rememberTimelineSort()
     var groupSimilarMedia by rememberGroupSimilarMedia()
     var groupRawJpg by rememberGroupRawJpg()
     var groupEditedCopies by rememberGroupEditedCopies()
@@ -198,6 +207,32 @@ fun SettingsTimelineAlbumsScreen() {
                     PreferenceOption(Settings.Misc.LAYOUT_MOSAIC, stringResource(R.string.timeline_layout_mosaic), timelineLayoutType == Settings.Misc.LAYOUT_MOSAIC),
                 ),
                 onOptionSelected = { timelineLayoutType = it },
+            )
+        }
+        DETAIL_TIMELINE_ORDER -> {
+            BackHandler { detailKey = null }
+            val captureSummary = stringResource(R.string.capture_time_summary)
+            val modifiedSummary = stringResource(R.string.modified_time_summary)
+            val newest = stringResource(R.string.sort_descending)
+            val oldest = stringResource(R.string.sort_ascending)
+            ChooserPreferenceDetailScreen(
+                title = stringResource(R.string.timeline_order),
+                description = stringResource(R.string.timeline_order_description),
+                options = listOf(
+                    Settings.Album.LastSort(OrderType.Descending, FilterKind.DATE),
+                    Settings.Album.LastSort(OrderType.Ascending, FilterKind.DATE),
+                    Settings.Album.LastSort(OrderType.Descending, FilterKind.DATE_MODIFIED),
+                    Settings.Album.LastSort(OrderType.Ascending, FilterKind.DATE_MODIFIED),
+                ).map { option ->
+                    val capture = option.kind == FilterKind.DATE
+                    PreferenceOption(
+                        value = option,
+                        label = "${if (capture) stringResource(R.string.capture_time) else stringResource(R.string.sort_by_date_modified)} · ${if (option.orderType == OrderType.Descending) newest else oldest}",
+                        isSelected = timelineSort == option,
+                        description = if (capture) captureSummary else modifiedSummary,
+                    )
+                },
+                onOptionSelected = { timelineSort = it },
             )
         }
         DETAIL_GROUP_SIMILAR -> {
@@ -422,6 +457,7 @@ fun SettingsTimelineAlbumsScreen() {
         else -> {
             TimelineAlbumsListScreen(
                 timelineLayoutType = timelineLayoutType,
+                timelineSort = timelineSort,
                 groupSimilarMedia = groupSimilarMedia,
                 onGroupSimilarChange = { groupSimilarMedia = it },
                 allowGifAnimation = allowGifAnimation,
@@ -444,6 +480,9 @@ fun SettingsTimelineAlbumsScreen() {
                 onDetailClick = { detailKey = it },
                 onDateFormatClick = { eventHandler.navigate(Screen.DateFormatScreen()) },
                 onStoryCardsClick = { eventHandler.navigate(Screen.StoryCardsSettingsScreen()) },
+                onRecheckCaptureDates = {
+                    WorkManager.getInstance(context).enqueueCaptureTimeIndex(force = true)
+                },
                 listState = listState,
             )
         }
@@ -453,6 +492,7 @@ fun SettingsTimelineAlbumsScreen() {
 @Composable
 private fun TimelineAlbumsListScreen(
     timelineLayoutType: String,
+    timelineSort: Settings.Album.LastSort,
     groupSimilarMedia: Boolean,
     onGroupSimilarChange: (Boolean) -> Unit,
     allowGifAnimation: Boolean,
@@ -475,6 +515,7 @@ private fun TimelineAlbumsListScreen(
     onDetailClick: (String) -> Unit,
     onDateFormatClick: () -> Unit,
     onStoryCardsClick: () -> Unit = {},
+    onRecheckCaptureDates: () -> Unit = {},
     listState: LazyListState,
 ) {
     @Composable
@@ -498,6 +539,24 @@ private fun TimelineAlbumsListScreen(
             summary = stringResource(R.string.timeline_layout_type_summary) + " ($layoutLabel)",
             onClick = { onDetailClick(DETAIL_TIMELINE_LAYOUT) },
             screenPosition = Position.Top
+        )
+
+        val timelineSortLabel = if (timelineSort.kind == FilterKind.DATE) {
+            stringResource(R.string.capture_time)
+        } else {
+            stringResource(R.string.sort_by_date_modified)
+        }
+        val timelineDirectionLabel = if (timelineSort.orderType == OrderType.Descending) {
+            stringResource(R.string.sort_descending)
+        } else {
+            stringResource(R.string.sort_ascending)
+        }
+        val timelineOrderPref = rememberPreference(
+            timelineSort,
+            title = stringResource(R.string.timeline_order),
+            summary = "$timelineSortLabel · $timelineDirectionLabel",
+            onClick = { onDetailClick(DETAIL_TIMELINE_ORDER) },
+            screenPosition = Position.Middle
         )
 
         val groupSimilarMediaPref = rememberSwitchPreference(
@@ -524,6 +583,13 @@ private fun TimelineAlbumsListScreen(
             title = stringResource(R.string.date_header),
             summary = stringResource(R.string.date_header_summary),
             onClick = onDateFormatClick,
+            screenPosition = Position.Middle
+        )
+
+        val recheckCaptureDatesPref = rememberPreference(
+            title = stringResource(R.string.recheck_capture_dates),
+            summary = stringResource(R.string.recheck_capture_dates_summary),
+            onClick = onRecheckCaptureDates,
             screenPosition = Position.Middle
         )
 
@@ -657,8 +723,8 @@ private fun TimelineAlbumsListScreen(
         )
 
         return remember(
-            timelineHeader, timelineLayoutPref, groupSimilarMediaPref,
-            allowGifAnimationPref, dateHeaderPref, showFilterButtonPref,
+            timelineHeader, timelineLayoutPref, timelineOrderPref, groupSimilarMediaPref,
+            allowGifAnimationPref, dateHeaderPref, recheckCaptureDatesPref, showFilterButtonPref,
             showSearchBarFavButtonPref, storyCardsPref,
             albumsHeader, mergeAlbumsByNamePref, updateModifiedDatePref, albumSectionsPref,
             pinnedAlbumsAsGridPref, showMediaTypeAlbumsPref, displayHeader, favIconPositionPref,
@@ -667,9 +733,11 @@ private fun TimelineAlbumsListScreen(
             mutableStateListOf<SettingsEntity>().apply {
                 add(timelineHeader)
                 add(timelineLayoutPref)
+                add(timelineOrderPref)
                 add(groupSimilarMediaPref)
                 add(allowGifAnimationPref)
                 add(dateHeaderPref)
+                add(recheckCaptureDatesPref)
                 add(showFilterButtonPref)
                 if (SdkCompat.supportsFavorites) {
                     add(showSearchBarFavButtonPref)

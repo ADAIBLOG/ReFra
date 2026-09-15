@@ -25,6 +25,7 @@ import com.dot.gallery.core.util.ext.querySteppedFlow
 import com.dot.gallery.core.util.ext.tryGetLong
 import com.dot.gallery.core.util.ext.tryGetString
 import com.dot.gallery.feature_node.data.data_source.mediastore.MediaQuery
+import com.dot.gallery.feature_node.domain.model.CaptureTimeOrigin
 import com.dot.gallery.feature_node.domain.model.Media
 import com.dot.gallery.feature_node.domain.model.MediaType
 import com.dot.gallery.feature_node.presentation.util.getDate
@@ -202,8 +203,16 @@ class MediaFlow(
         val title = it.tryGetString(indexCache[i++]).orEmpty()
         val albumID = it.getLong(indexCache[i++])
         val albumLabel = it.tryGetString(indexCache[i++], Build.MODEL)
-        val takenTimestamp = it.tryGetLong(indexCache[i++])
-            ?: title.parseTimestampFromFilename()
+        val mediaStoreTakenTimestamp = it.tryGetLong(indexCache[i++])?.takeIf { value -> value != 0L }
+        val filenameTimestamp = if (mediaStoreTakenTimestamp == null) {
+            title.parseTimestampFromFilename()
+        } else null
+        val takenTimestamp = mediaStoreTakenTimestamp ?: filenameTimestamp
+        val captureTimeOrigin = when {
+            mediaStoreTakenTimestamp != null -> CaptureTimeOrigin.MEDIA_STORE
+            filenameTimestamp != null -> CaptureTimeOrigin.FILENAME
+            else -> CaptureTimeOrigin.MODIFIED_FALLBACK
+        }
         val modifiedTimestamp = it.getLong(indexCache[i++])
         val duration = it.tryGetString(indexCache[i++])
         val size = it.getLong(indexCache[i++])
@@ -228,6 +237,7 @@ class MediaFlow(
             albumLabel = albumLabel ?: Build.MODEL,
             timestamp = modifiedTimestamp,
             takenTimestamp = takenTimestamp,
+            captureTimeOrigin = captureTimeOrigin,
             expiryTimestamp = expiryTimestamp,
             fullDate = formattedDate,
             duration = duration,

@@ -79,10 +79,12 @@ import com.dot.gallery.feature_node.domain.util.getCategory
 import com.dot.gallery.feature_node.domain.util.getUri
 import com.dot.gallery.feature_node.domain.util.isCloud
 import com.dot.gallery.feature_node.domain.util.isEncrypted
+import com.dot.gallery.feature_node.domain.util.isImage
 import com.dot.gallery.feature_node.domain.util.isRaw
 import com.dot.gallery.feature_node.domain.util.isTrashed
 import com.dot.gallery.feature_node.domain.util.isVideo
 import com.dot.gallery.feature_node.domain.util.readUriOnly
+import com.dot.gallery.feature_node.presentation.exif.CaptureDateEditSheet
 import com.dot.gallery.feature_node.presentation.exif.MetadataEditSheet
 import com.dot.gallery.feature_node.presentation.mediaview.components.media.MotionPhotoShotsSection
 import com.dot.gallery.feature_node.presentation.mediaview.components.media.MotionPhotoState
@@ -331,6 +333,7 @@ fun <T : Media> MediaViewSheetDetails(
 
                 val dateCaption = rememberMediaDateCaption(metadata, currentMedia)
                 val metadataSheetState = rememberAppBottomSheetState()
+                val captureDateSheetState = rememberAppBottomSheetState()
                 val backupSheetState = rememberAppBottomSheetState()
                 val allMetadataEventHandler = LocalEventHandler.current
                 val mediaInfoList = rememberMediaInfo(
@@ -393,14 +396,14 @@ fun <T : Media> MediaViewSheetDetails(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable(
-                                        enabled = !currentMedia.readUriOnly,
+                                        enabled = currentMedia.canMakeActions && currentMedia.isImage,
                                         indication = null,
                                         interactionSource = remember {
                                             MutableInteractionSource()
                                         }
                                     ) {
                                         scope.launch {
-                                            metadataSheetState.show()
+                                            captureDateSheetState.show()
                                         }
                                     },
                                 mediaDateCaption = dateCaption
@@ -705,6 +708,13 @@ fun <T : Media> MediaViewSheetDetails(
                         state = metadataSheetState,
                         media = currentMedia,
                         metadata = metadata
+                    )
+                }
+
+                if (captureDateSheetState.isVisible) {
+                    CaptureDateEditSheet(
+                        state = captureDateSheetState,
+                        media = currentMedia
                     )
                 }
 

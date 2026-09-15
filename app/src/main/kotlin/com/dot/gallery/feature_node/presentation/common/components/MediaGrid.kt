@@ -227,7 +227,11 @@ private fun <T : Media> GridPinchZoomScope.MediaGridContentWithHeaders(
             .padding(paddingValues)
             .padding(top = 32.dp)
             .padding(vertical = 32.dp),
-        segments = rememberMonthSegments(mappedData, leadingItemCount),
+        segments = rememberMonthSegments(
+            mappedData = mappedData,
+            leadingItemCount = leadingItemCount,
+            dateSource = mediaState.value.dateSource
+        ),
         headers = headers,
         state = gridState,
     ) {

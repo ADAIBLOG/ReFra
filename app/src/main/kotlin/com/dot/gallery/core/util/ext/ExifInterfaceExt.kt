@@ -7,6 +7,10 @@ package com.dot.gallery.core.util.ext
 
 import android.util.Size
 import androidx.exifinterface.media.ExifInterface
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 private const val DEFAULT_VALUE_INT = -1
 private const val DEFAULT_VALUE_DOUBLE = -1.0
@@ -14,6 +18,20 @@ private const val DEFAULT_VALUE_DOUBLE = -1.0
 fun ExifInterface.updateImageDescription(string: String) {
     setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, string)
 }
+
+fun ExifInterface.updateCaptureDate(timestampMillis: Long, zoneId: ZoneId = ZoneId.systemDefault()) {
+    val dateTime = Instant.ofEpochMilli(timestampMillis).atZone(zoneId)
+    val dateValue = dateTime.format(DateTimeFormatter.ofPattern("uuuu:MM:dd HH:mm:ss", Locale.ROOT))
+    val offsetValue = dateTime.offset.id.let { if (it == "Z") "+00:00" else it }
+    setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, dateValue)
+    setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, dateValue)
+    setAttribute(ExifInterface.TAG_DATETIME, dateValue)
+    setAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL, offsetValue)
+    setAttribute(ExifInterface.TAG_OFFSET_TIME_DIGITIZED, offsetValue)
+    setAttribute(ExifInterface.TAG_OFFSET_TIME, offsetValue)
+}
+
+fun ExifInterface.captureDateMillis(): Long? = getDateTimeOriginal().takeUnless { it == -1L }
 
 fun ExifInterface.deleteMetadata() {
     val tags = arrayOf(

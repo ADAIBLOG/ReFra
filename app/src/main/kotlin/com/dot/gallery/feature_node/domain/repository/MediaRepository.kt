@@ -50,6 +50,20 @@ enum class MediaMutationResult {
     FAILED,
 }
 
+enum class CaptureDateEditCapability {
+    DIRECT_WRITE,
+    SAFE_COPY,
+    COPY_ONLY,
+    UNSUPPORTED
+}
+
+sealed interface CaptureDateEditResult {
+    data object Updated : CaptureDateEditResult
+    data class CopyCreated(val uri: Uri, val canTrashOriginal: Boolean) : CaptureDateEditResult
+    data class NeedsCopy(val capability: CaptureDateEditCapability) : CaptureDateEditResult
+    data class Failed(val reason: String) : CaptureDateEditResult
+}
+
 interface MediaRepository {
 
     suspend fun updateInternalDatabase()
@@ -168,6 +182,12 @@ interface MediaRepository {
     ): SanitizationResult
 
     suspend fun refreshMetadataFor(media: Media)
+
+    suspend fun probeCaptureDateEdit(media: Media): CaptureDateEditCapability
+
+    suspend fun updateMediaCaptureDate(media: Media, timestampMillis: Long): CaptureDateEditResult
+
+    suspend fun createDatedCopy(media: Media, timestampMillis: Long): CaptureDateEditResult
 
     suspend fun <T: Media> updateMediaDescription(
         media: T,

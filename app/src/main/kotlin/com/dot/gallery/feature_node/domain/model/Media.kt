@@ -15,6 +15,7 @@ import android.os.Bundle
 import android.os.Parcelable
 import android.provider.MediaStore
 import android.webkit.MimeTypeMap
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import com.dot.gallery.core.Constants
 import com.dot.gallery.feature_node.domain.util.UriSerializer
@@ -71,6 +72,12 @@ sealed class Media : Parcelable {
         override val timestamp: Long,
         override val expiryTimestamp: Long? = null,
         override val takenTimestamp: Long? = null,
+        @ColumnInfo(defaultValue = "'modified_fallback'")
+        val captureTimeOrigin: CaptureTimeOrigin = if (takenTimestamp != null) {
+            CaptureTimeOrigin.MEDIA_STORE
+        } else {
+            CaptureTimeOrigin.MODIFIED_FALLBACK
+        },
         override val fullDate: String,
         override val mimeType: String,
         override val favorite: Int,

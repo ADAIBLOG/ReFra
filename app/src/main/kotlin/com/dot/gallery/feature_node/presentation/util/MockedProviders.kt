@@ -28,6 +28,8 @@ import com.dot.gallery.feature_node.domain.model.CollectionWithCount
 import com.dot.gallery.feature_node.domain.model.IgnoredAlbum
 import com.dot.gallery.feature_node.domain.model.ImageEmbedding
 import com.dot.gallery.feature_node.domain.model.Media
+import com.dot.gallery.feature_node.domain.repository.CaptureDateEditCapability
+import com.dot.gallery.feature_node.domain.repository.CaptureDateEditResult
 import com.dot.gallery.feature_node.domain.repository.MediaMutationResult
 import com.dot.gallery.feature_node.domain.model.GeoMedia
 import com.dot.gallery.feature_node.domain.model.LocationMedia
@@ -158,6 +160,19 @@ class MockedMediaHandler: MediaHandler {
         mode: MetadataRemovalMode,
         saveMode: MetadataSaveMode
     ): SanitizationResult = SanitizationResult.Unsupported(MediaContainerFormat.UNKNOWN, "Unavailable in preview")
+
+    override suspend fun probeCaptureDateEdit(media: Media): CaptureDateEditCapability =
+        CaptureDateEditCapability.UNSUPPORTED
+
+    override suspend fun updateMediaCaptureDate(
+        media: Media,
+        timestampMillis: Long
+    ): CaptureDateEditResult = CaptureDateEditResult.Failed("Unavailable in preview")
+
+    override suspend fun createDatedCopy(
+        media: Media,
+        timestampMillis: Long
+    ): CaptureDateEditResult = CaptureDateEditResult.Failed("Unavailable in preview")
 
     override suspend fun <T : Media> updateMediaDescription(
         media: T,

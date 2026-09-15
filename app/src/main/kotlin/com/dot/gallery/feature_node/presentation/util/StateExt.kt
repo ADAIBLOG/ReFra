@@ -24,6 +24,8 @@ import com.dot.gallery.feature_node.domain.model.Media
 import com.dot.gallery.feature_node.domain.model.Media.UriMedia
 import com.dot.gallery.feature_node.domain.model.MediaItem
 import com.dot.gallery.feature_node.domain.model.MediaState
+import com.dot.gallery.feature_node.domain.model.TimelineDateSource
+import com.dot.gallery.feature_node.domain.model.timestampFor
 import com.dot.gallery.feature_node.domain.repository.MediaRepository
 import com.dot.gallery.feature_node.domain.util.MediaOrder
 import com.dot.gallery.feature_node.domain.util.MediaGroupType
@@ -133,7 +135,8 @@ fun <T : Media> Flow<Resource<List<T>>>.mapMedia(
     updateDatabase: () -> Unit,
     defaultDateFormat: String,
     extendedDateFormat: String,
-    weeklyDateFormat: String
+    weeklyDateFormat: String,
+    dateSource: TimelineDateSource = TimelineDateSource.CAPTURE_TIME
 ) = map {
     updateDatabase()
     mapMediaToItem(
@@ -147,7 +150,8 @@ fun <T : Media> Flow<Resource<List<T>>>.mapMedia(
         enabledGroupTypes = enabledGroupTypes,
         defaultDateFormat = defaultDateFormat,
         extendedDateFormat = extendedDateFormat,
-        weeklyDateFormat = weeklyDateFormat
+        weeklyDateFormat = weeklyDateFormat,
+        dateSource = dateSource
     )
 }
 
@@ -163,7 +167,8 @@ suspend fun <T : Media> MutableStateFlow<MediaState<T>>.collectMedia(
     cloudGroupKeyOverrides: Map<Long, String> = emptyMap(),
     defaultDateFormat: String,
     extendedDateFormat: String,
-    weeklyDateFormat: String
+    weeklyDateFormat: String,
+    dateSource: TimelineDateSource = TimelineDateSource.CAPTURE_TIME
 ) = withContext(Dispatchers.IO) {
     emit(
         mapMediaToItem(
@@ -178,7 +183,8 @@ suspend fun <T : Media> MutableStateFlow<MediaState<T>>.collectMedia(
             cloudGroupKeyOverrides = cloudGroupKeyOverrides,
             defaultDateFormat = defaultDateFormat,
             extendedDateFormat = extendedDateFormat,
-            weeklyDateFormat = weeklyDateFormat
+            weeklyDateFormat = weeklyDateFormat,
+            dateSource = dateSource
         )
     )
 }
@@ -196,7 +202,8 @@ suspend fun <T : Media> mapMediaToItem(
     cloudBackups: Map<Long, List<Media.UriMedia>> = emptyMap(),
     defaultDateFormat: String,
     extendedDateFormat: String,
-    weeklyDateFormat: String
+    weeklyDateFormat: String,
+    dateSource: TimelineDateSource = TimelineDateSource.CAPTURE_TIME
 ) = withContext(Dispatchers.IO) {
     val estimatedSize = data.size + (data.size / 20) // ~1 header per 20 items
     val mappedData = ArrayList<MediaItem<T>>(estimatedSize)
@@ -219,10 +226,11 @@ suspend fun <T : Media> mapMediaToItem(
         stringYesterday = "Yesterday"
     ) else null
     val groupedData = data.groupBy {
+        val timestamp = it.timestampFor(dateSource)
         when {
-            groupByYear -> it.definedTimestamp.getYear()
-            groupByMonth -> it.definedTimestamp.getMonth()
-            else -> dateGrouper!!.classify(it.definedTimestamp)
+            groupByYear -> timestamp.getYear()
+            groupByMonth -> timestamp.getMonth()
+            else -> dateGrouper!!.classify(timestamp)
         }
     }
     val hasCloudOverrides = cloudGroupKeyOverrides.isNotEmpty()
@@ -306,7 +314,7 @@ suspend fun <T : Media> mapMediaToItem(
             }
         }
         if (!groupByYear && withMonthHeader) {
-            val year = data.firstOrNull()?.definedTimestamp?.getYear() ?: ""
+            val year = data.firstOrNull()?.timestampFor(dateSource)?.getYear() ?: ""
             if (year.isNotEmpty() && !yearHeaderList.contains(year)) {
                 yearHeaderList.add(year)
                 if (mappedDataWithYearly.isNotEmpty()) {
@@ -334,13 +342,17 @@ suspend fun <T : Media> mapMediaToItem(
         mappedMediaWithMonthly = if (withMonthHeader) mappedDataWithMonthly else emptyList(),
         mappedMediaWithYearly = if (withMonthHeader) mappedDataWithYearly else emptyList(),
         cloudBackups = cloudBackups,
-        dateHeader = data.dateHeader(albumId)
+        dateHeader = data.dateHeader(albumId, dateSource),
+        dateSource = dateSource
     )
 }
 
-private fun List<Media>.dateHeader(albumId: Long): String =
+private fun List<Media>.dateHeader(
+    albumId: Long,
+    dateSource: TimelineDateSource
+): String =
     if (albumId != -1L && isNotEmpty()) {
-        val startDate: DateExt = last().definedTimestamp.getDateExt()
-        val endDate: DateExt = first().definedTimestamp.getDateExt()
+        val startDate: DateExt = last().timestampFor(dateSource).getDateExt()
+        val endDate: DateExt = first().timestampFor(dateSource).getDateExt()
         getDateHeader(startDate, endDate)
     } else ""

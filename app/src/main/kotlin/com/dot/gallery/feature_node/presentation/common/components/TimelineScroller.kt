@@ -31,6 +31,8 @@ import com.dot.gallery.core.Constants.Animation.exitAnimation
 import com.dot.gallery.feature_node.domain.model.Media
 import com.dot.gallery.feature_node.domain.model.MediaItem
 import com.dot.gallery.feature_node.domain.model.MosaicDisplayItem
+import com.dot.gallery.feature_node.domain.model.TimelineDateSource
+import com.dot.gallery.feature_node.domain.model.timestampFor
 import com.dot.gallery.feature_node.presentation.util.getCurrentAndroid
 import com.dot.gallery.feature_node.presentation.util.rememberFeedbackManager
 import com.dot.gallery.scrollbar.InternalLazyVerticalGridScrollbar
@@ -136,14 +138,15 @@ private inline fun buildMonthSegments(
 fun <T : Media> rememberMonthSegments(
     mappedData: List<MediaItem<T>>,
     leadingItemCount: Int = 0,
+    dateSource: TimelineDateSource = TimelineDateSource.CAPTURE_TIME,
 ): MonthSegments {
-    return remember(mappedData, leadingItemCount) {
+    return remember(mappedData, leadingItemCount, dateSource) {
         buildMonthSegments(
             count = mappedData.size,
             leadingItemCount = leadingItemCount,
             isHeader = { mappedData[it] is MediaItem.Header<*> },
             timestampSecAt = {
-                (mappedData[it] as MediaItem.MediaViewItem<T>).media.definedTimestamp
+                (mappedData[it] as MediaItem.MediaViewItem<T>).media.timestampFor(dateSource)
             },
         )
     }
@@ -161,23 +164,24 @@ fun <T : Media> rememberMosaicMonthSegments(
     columns: Int,
     allowHeaders: Boolean,
     leadingItemCount: Int = 0,
+    dateSource: TimelineDateSource = TimelineDateSource.CAPTURE_TIME,
 ): MonthSegments {
     val displayItems = remember(mappedData, allowHeaders, columns) {
         val items = if (allowHeaders) mappedData
         else mappedData.fastFilter { it is MediaItem.MediaViewItem<*> }
         buildMosaicDisplayItems(items, columns)
     }
-    return remember(displayItems, leadingItemCount) {
+    return remember(displayItems, leadingItemCount, dateSource) {
         buildMonthSegments(
             count = displayItems.size,
             leadingItemCount = leadingItemCount,
             isHeader = { displayItems[it] is MosaicDisplayItem.HeaderItem },
             timestampSecAt = { idx ->
                 when (val item = displayItems[idx]) {
-                    is MosaicDisplayItem.BigTileItem -> item.mediaItem.media.definedTimestamp
-                    is MosaicDisplayItem.QuadTileItem -> item.mediaItems.first().media.definedTimestamp
-                    is MosaicDisplayItem.PairTileItem -> item.mediaItems.first().media.definedTimestamp
-                    is MosaicDisplayItem.SingleItem -> item.mediaItem.media.definedTimestamp
+                    is MosaicDisplayItem.BigTileItem -> item.mediaItem.media.timestampFor(dateSource)
+                    is MosaicDisplayItem.QuadTileItem -> item.mediaItems.first().media.timestampFor(dateSource)
+                    is MosaicDisplayItem.PairTileItem -> item.mediaItems.first().media.timestampFor(dateSource)
+                    is MosaicDisplayItem.SingleItem -> item.mediaItem.media.timestampFor(dateSource)
                     is MosaicDisplayItem.HeaderItem -> 0L
                 }
             },

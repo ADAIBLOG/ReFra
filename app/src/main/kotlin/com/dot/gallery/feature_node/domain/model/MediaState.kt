@@ -12,6 +12,7 @@ data class MediaState<Type: Media>(
     val mappedMediaWithYearly: List<MediaItem<Type>> = emptyList(),
     val headers: List<MediaItem.Header<Type>> = emptyList(),
     val dateHeader: String = "",
+    val dateSource: TimelineDateSource = TimelineDateSource.CAPTURE_TIME,
     /**
      * Maps a local media id to the cloud copies that back it up (one entry per cloud
      * provider/account holding a matching asset). Populated only for the unified timeline

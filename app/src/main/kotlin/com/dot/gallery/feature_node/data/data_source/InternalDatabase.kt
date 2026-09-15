@@ -101,9 +101,10 @@ import com.dot.gallery.feature_node.domain.util.Converters
         AlbumSectionMember::class,
         SmartScanRunEntity::class,
         SmartScanPhaseEntity::class,
-        MediaFeatureStateEntity::class
+        MediaFeatureStateEntity::class,
+        MediaCaptureTimeEntity::class
     ],
-    version = 45,
+    version = 46,
     exportSchema = true,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
@@ -166,6 +167,8 @@ abstract class InternalDatabase : RoomDatabase() {
     abstract fun getBlacklistDao(): BlacklistDao
 
     abstract fun getMediaDao(): MediaDao
+
+    abstract fun getMediaCaptureTimeDao(): MediaCaptureTimeDao
 
     abstract fun getClassifierDao(): ClassifierDao
 
