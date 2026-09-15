@@ -949,6 +949,7 @@
     <string name="locations_count">%1$d locations</string>
     <string name="no_locations_found">No locations found</string>
     <string name="locations">Locations</string>
+    <string name="unknown_location">Unknown Location</string>
     <string name="no_categories_found">No categories found</string>
 
     <!-- Dynamic search carousels -->

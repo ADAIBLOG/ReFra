@@ -51,6 +51,7 @@ import com.dot.gallery.cloud.core.SyncState
 import com.dot.gallery.cloud.core.cloudAlbumId
 import com.dot.gallery.cloud.core.stableIdHash
 import com.dot.gallery.cloud.data.entity.CloudMediaEntity
+import com.dot.gallery.cloud.data.entity.CloudMediaSnapshotMapper
 import com.dot.gallery.cloud.data.repository.CloudRepository
 import com.dot.gallery.cloud.sync.CloudUploadWorker
 import com.dot.gallery.cloud.sync.isActiveBackupWork
@@ -364,31 +365,34 @@ class MediaDistributorImpl @Inject constructor(
     // the count constant (e.g. a favorite/archive toggle, or an asset swapped for another) changes
     // content but not size, so a size-only guard would drop the update and leave the timeline stale.
     private val _cloudCachedMedia: StateFlow<List<Media.UriMedia>> = flow {
+        val mapper = CloudMediaSnapshotMapper()
         emit(withContext(Dispatchers.IO) {
-            cloudRepository.getCachedMediaAsync().map { it.toUriMedia() }
+            mapper.map(cloudRepository.getCachedMediaAsync())
         })
         emitAll(cloudRepository.getCachedMedia().map { entities ->
-            entities.map { it.toUriMedia() }
+            mapper.map(entities)
         })
     }.distinctUntilChanged()
      .stateIn(appScope, SharingStarted.Eagerly, emptyList())
 
     private val _cloudCachedFavorites: StateFlow<List<Media.UriMedia>> = flow {
+        val mapper = CloudMediaSnapshotMapper()
         emit(withContext(Dispatchers.IO) {
-            cloudRepository.getCachedFavoritesAsync().map { it.toUriMedia() }
+            mapper.map(cloudRepository.getCachedFavoritesAsync())
         })
         emitAll(cloudRepository.getCachedFavorites().map { entities ->
-            entities.map { it.toUriMedia() }
+            mapper.map(entities)
         })
     }.distinctUntilChanged()
      .stateIn(appScope, SharingStarted.Eagerly, emptyList())
 
     private val _cloudCachedTrashed: StateFlow<List<Media.UriMedia>> = flow {
+        val mapper = CloudMediaSnapshotMapper()
         emit(withContext(Dispatchers.IO) {
-            cloudRepository.getCachedTrashedAsync().map { it.toUriMedia() }
+            mapper.map(cloudRepository.getCachedTrashedAsync())
         })
         emitAll(cloudRepository.getCachedTrashed().map { entities ->
-            entities.map { it.toUriMedia() }
+            mapper.map(entities)
         })
     }.distinctUntilChanged()
      .stateIn(appScope, SharingStarted.Eagerly, emptyList())
@@ -1274,6 +1278,9 @@ class MediaDistributorImpl @Inject constructor(
     ) { metadata, timelineState ->
         val mediaById = HashMap<Long, Media.UriMedia>(timelineState.media.size)
         for (m in timelineState.media) { mediaById[m.id] = m }
+        for (copies in timelineState.cloudBackups.values) {
+            for (m in copies) { mediaById.putIfAbsent(m.id, m) }
+        }
         val metadataById = metadata.associateBy { it.mediaId }
 
         val locationGroupMap = LinkedHashMap<String, Media.UriMedia>()
@@ -1282,8 +1289,11 @@ class MediaDistributorImpl @Inject constructor(
         for (meta in metadata) {
             val media = mediaById[meta.mediaId] ?: continue
 
-            if (meta.gpsLocationNameCity != null && meta.gpsLocationNameCountry != null) {
-                val key = "${meta.gpsLocationNameCity}, ${meta.gpsLocationNameCountry}"
+            if (!meta.gpsLocationNameCity.isNullOrBlank() || !meta.gpsLocationNameCountry.isNullOrBlank()) {
+                val key = listOfNotNull(
+                    meta.gpsLocationNameCity?.takeIf(String::isNotBlank),
+                    meta.gpsLocationNameCountry?.takeIf(String::isNotBlank),
+                ).joinToString(", ")
                 val existing = locationGroupMap[key]
                 if (existing == null || media.definedTimestamp > existing.definedTimestamp) {
                     locationGroupMap[key] = media
@@ -1312,6 +1322,8 @@ class MediaDistributorImpl @Inject constructor(
                     location = location,
                     city = mediaMetadata?.gpsLocationNameCity,
                     country = mediaMetadata?.gpsLocationNameCountry,
+                    latitude = mediaMetadata?.gpsLatitude,
+                    longitude = mediaMetadata?.gpsLongitude,
                 )
             }
             .sortedBy { it.location }

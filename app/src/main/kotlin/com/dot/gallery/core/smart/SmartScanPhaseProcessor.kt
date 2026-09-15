@@ -9,6 +9,8 @@ import android.content.Context
 import android.graphics.Bitmap
 import androidx.core.net.toUri
 import androidx.room.withTransaction
+import androidx.work.ExistingWorkPolicy
+import androidx.work.WorkManager
 import com.dot.gallery.BuildConfig
 import com.dot.gallery.core.Resource
 import com.dot.gallery.core.Settings
@@ -24,6 +26,7 @@ import com.dot.gallery.core.ml.DetectedFaceBox
 import com.dot.gallery.core.ml.FaceHelper
 import com.dot.gallery.core.ml.ModelGroup
 import com.dot.gallery.core.ml.ModelManager
+import com.dot.gallery.core.workers.enqueueMetadataLocationRepair
 import com.dot.gallery.feature_node.data.data_source.InternalDatabase
 import com.dot.gallery.feature_node.data.data_source.MediaFeature
 import com.dot.gallery.feature_node.data.data_source.MediaFeatureStateEntity
@@ -282,7 +285,8 @@ class SourceSyncProcessor @Inject constructor(
 
 class MetadataPhaseProcessor @Inject constructor(
     repository: MediaRepository,
-    database: InternalDatabase
+    database: InternalDatabase,
+    private val workManager: WorkManager
 ) : MediaPhaseProcessor(repository, database) {
     override val phase = SmartScanPhase.METADATA
     override val revision = "metadata-v1"
@@ -386,6 +390,7 @@ class MetadataPhaseProcessor @Inject constructor(
             progress(context, candidates.size, index + 1, succeeded, skipped, failed)
             yield()
         }
+        workManager.enqueueMetadataLocationRepair(ExistingWorkPolicy.APPEND_OR_REPLACE)
         val summary = SmartScanProgress(candidates.size, candidates.size, succeeded, skipped, failed)
         return when {
             failed == candidates.size && candidates.isNotEmpty() ->

@@ -15,12 +15,14 @@ import com.dot.gallery.feature_node.domain.model.locationIdentityKey
 import com.dot.gallery.feature_node.domain.model.locationLabelKey
 import com.dot.gallery.feature_node.domain.model.matchesLocationCoordinates
 import com.dot.gallery.feature_node.domain.model.matchesLocationName
+import com.dot.gallery.feature_node.presentation.location.locationLabel
 import com.dot.gallery.feature_node.presentation.location.mapMediaViewerRoute
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Locale
 
 class MapPhotoClustererTest {
     @Test
@@ -190,6 +192,48 @@ class MapPhotoClustererTest {
             )
         )
         assertFalse(matchesLocationCoordinates(17.84901, 73.80341, 17.8492, 73.8036))
+    }
+
+    @Test
+    fun zeroUnnamedLocationFallsBackToUnknownLocationLabel() {
+        val previous = Locale.getDefault()
+        Locale.setDefault(Locale.GERMANY)
+        try {
+            assertEquals("Unknown Location", locationLabel(null, null, 0.0, 0.0))
+            assertEquals("Unknown Location", locationLabel(null, null, -0.0, -0.0))
+            assertFalse(locationLabel(null, null, 0.0, -0.0).contains("0,0000"))
+        } finally {
+            Locale.setDefault(previous)
+        }
+    }
+
+    @Test
+    fun namedZeroCoordinatesKeepTheirActualName() {
+        assertEquals(
+            "Null Island, Nowhere",
+            locationLabel("Null Island", "Nowhere", 0.0, 0.0),
+        )
+        assertEquals("United Kingdom", locationLabel(null, "United Kingdom", 0.0, 0.0))
+    }
+
+    @Test
+    fun singleAxisZeroStillRendersCoordinates() {
+        val previous = Locale.getDefault()
+        Locale.setDefault(Locale.US)
+        try {
+            assertEquals("0.0000, 1.0000", locationLabel(null, null, 0.0, 1.0))
+            assertEquals("1.0000, 0.0000", locationLabel(null, null, 1.0, 0.0))
+        } finally {
+            Locale.setDefault(previous)
+        }
+    }
+
+    @Test
+    fun invalidOrMissingCoordinatesReturnInjectedFallback() {
+        assertEquals("Unavailable", locationLabel(null, null, null, null, "Unavailable"))
+        assertEquals("Unavailable", locationLabel(null, null, 91.0, 0.0, "Unavailable"))
+        assertEquals("Unavailable", locationLabel(null, null, 0.0, 181.0, "Unavailable"))
+        assertEquals("Unavailable", locationLabel(null, null, Double.NaN, 0.0, "Unavailable"))
     }
 
     @Test

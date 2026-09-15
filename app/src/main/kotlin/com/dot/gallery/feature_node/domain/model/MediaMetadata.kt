@@ -223,6 +223,10 @@ internal suspend fun <T> bestEffortReverseGeocode(
     lookup: suspend (Double, Double) -> T?
 ): T? {
     if (!enabled || latitude == null || longitude == null) return null
+    if (!latitude.isFinite() || !longitude.isFinite() ||
+        latitude !in -90.0..90.0 || longitude !in -180.0..180.0 ||
+        (latitude == 0.0 && longitude == 0.0)
+    ) return null
     return try {
         lookup(latitude, longitude)
     } catch (error: Exception) {

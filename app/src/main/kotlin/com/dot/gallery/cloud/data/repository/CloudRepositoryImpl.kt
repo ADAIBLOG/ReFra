@@ -31,10 +31,14 @@ import com.dot.gallery.cloud.data.entity.CloudMediaEntity
 import com.dot.gallery.cloud.network.ServerUrlResolver
 import com.dot.gallery.core.Resource
 import com.dot.gallery.feature_node.domain.model.Media
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,6 +47,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.shareIn
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -474,19 +479,26 @@ class CloudRepositoryImpl @Inject constructor(
 
     // === Cache ===
 
-    override fun getCachedMedia(): Flow<List<CloudMediaEntity>> = cloudMediaDao.getAllForTimeline()
+    private val cacheScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private val cachedMedia = cloudMediaDao.getAllForTimeline()
+        .shareIn(cacheScope, SharingStarted.WhileSubscribed(5000), replay = 1)
+    private val cachedFavorites = cloudMediaDao.getFavorites()
+        .shareIn(cacheScope, SharingStarted.WhileSubscribed(5000), replay = 1)
+    private val cachedTrashed = cloudMediaDao.getTrashed()
+        .shareIn(cacheScope, SharingStarted.WhileSubscribed(5000), replay = 1)
+
+    override fun getCachedMedia(): Flow<List<CloudMediaEntity>> = cachedMedia
 
     override suspend fun getCachedMediaAsync(): List<CloudMediaEntity> =
         cloudMediaDao.getAllCachedAsync()
 
-    override fun getCachedFavorites(): Flow<List<CloudMediaEntity>> =
-        cloudMediaDao.getFavorites()
+    override fun getCachedFavorites(): Flow<List<CloudMediaEntity>> = cachedFavorites
 
     override suspend fun getCachedFavoritesAsync(): List<CloudMediaEntity> =
         cloudMediaDao.getFavoritesAsync()
 
-    override fun getCachedTrashed(): Flow<List<CloudMediaEntity>> =
-        cloudMediaDao.getTrashed()
+    override fun getCachedTrashed(): Flow<List<CloudMediaEntity>> = cachedTrashed
 
     override suspend fun getCachedTrashedAsync(): List<CloudMediaEntity> =
         cloudMediaDao.getTrashedAsync()

@@ -38,10 +38,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dot.gallery.BuildConfig
+import com.dot.gallery.R
 import com.dot.gallery.core.Constants.cellsList
 import com.dot.gallery.core.LocalEventHandler
 import com.dot.gallery.core.LocalMediaSelector
@@ -72,7 +75,6 @@ import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.hazeSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.util.Locale
 
 @OptIn(ExperimentalSharedTransitionApi::class, ExperimentalMaterial3Api::class,
     ExperimentalFoundationApi::class
@@ -94,17 +96,19 @@ fun LocationTimelineScreen(
     val eventHandler = LocalEventHandler.current
     val selector = LocalMediaSelector.current
     val selectedMedia = selector.selectedMedia.collectAsStateWithLifecycle()
-    val locationTitle = remember(gpsLocationNameCity, gpsLocationNameCountry, latitude, longitude) {
-        listOf(gpsLocationNameCity, gpsLocationNameCountry)
-            .filter(String::isNotBlank)
-            .joinToString(", ")
-            .ifBlank {
-                if (latitude != null && longitude != null) {
-                    String.format(Locale.getDefault(), "%.4f, %.4f", latitude, longitude)
-                } else {
-                    ""
-                }
-            }
+    val unknownLocationLabel = stringResource(R.string.unknown_location)
+    val configuration = LocalConfiguration.current
+    val locationTitle = remember(
+        gpsLocationNameCity, gpsLocationNameCountry, latitude, longitude,
+        unknownLocationLabel, configuration,
+    ) {
+        locationLabel(
+            gpsLocationNameCity,
+            gpsLocationNameCountry,
+            latitude,
+            longitude,
+            unknownLocationLabel,
+        )
     }
 
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(

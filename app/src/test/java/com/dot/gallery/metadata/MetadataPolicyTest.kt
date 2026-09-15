@@ -97,6 +97,20 @@ class MetadataPolicyTest {
         assertNull(result)
     }
 
+    @Test
+    fun reverseGeocoderSkipsZeroAndInvalidCoordinates() = runTest {
+        val calls = mutableListOf<Pair<Double, Double>>()
+
+        assertNull(bestEffortReverseGeocode(true, 0.0, 0.0) { a, b -> calls += a to b; "x" })
+        assertNull(bestEffortReverseGeocode(true, -0.0, -0.0) { a, b -> calls += a to b; "x" })
+        assertNull(bestEffortReverseGeocode(true, 91.0, 0.0) { a, b -> calls += a to b; "x" })
+        assertNull(bestEffortReverseGeocode(true, 0.0, 181.0) { a, b -> calls += a to b; "x" })
+        assertNull(bestEffortReverseGeocode(true, Double.NaN, 0.0) { a, b -> calls += a to b; "x" })
+        assertEquals("x", bestEffortReverseGeocode(true, 0.0, 1.0) { a, b -> calls += a to b; "x" })
+
+        assertEquals(listOf(0.0 to 1.0), calls)
+    }
+
     @Test(expected = CancellationException::class)
     fun reverseGeocoderCancellationIsPreserved() = runTest {
         bestEffortReverseGeocode<String>(

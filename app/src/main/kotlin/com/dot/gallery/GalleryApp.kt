@@ -41,6 +41,7 @@ import com.dot.gallery.core.decoder.supportTiffDecoder
 import com.dot.gallery.core.decoder.supportRawDecoder
 import com.dot.gallery.core.smart.SmartScanScheduler
 import com.dot.gallery.core.workers.TempVaultCleanupWorker
+import com.dot.gallery.core.workers.enqueueMetadataLocationRepair
 import com.dot.gallery.feature_node.data.data_source.SmartScanFeature
 import com.dot.gallery.feature_node.domain.repository.MediaRepository
 import com.dot.gallery.feature_node.presentation.frameextract.FrameSourceCleanup
@@ -193,6 +194,7 @@ class GalleryApp : Application(), SingletonSketch.Factory, Configuration.Provide
         StartupTracer.trace("App.super.onCreate (Hilt DI)") {
             super.onCreate()
         }
+        workManager.enqueueMetadataLocationRepair()
 
         appScope.launch {
             metadataSanitizer.recoverPendingTransactions()

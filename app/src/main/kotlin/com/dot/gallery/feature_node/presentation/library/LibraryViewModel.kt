@@ -231,13 +231,13 @@ class LibraryViewModel @Inject constructor(
     val geoMedia = mapGeoMediaSource.mergedGeoMedia(
         localGeoMedia = mediaDistributor.geoMediaFlow,
         timelineMedia = mediaDistributor.timelineMediaFlow,
-    ).stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val locations = mapGeoMediaSource.mergedLocations(
         localLocations = mediaDistributor.locationsMediaFlow,
         geoMedia = geoMedia,
         timelineMedia = mediaDistributor.timelineMediaFlow,
-    ).stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val indicatorState = combine(
         if (SdkCompat.supportsTrash) mediaDistributor.trashMediaFlow else flowOf(MediaState()),

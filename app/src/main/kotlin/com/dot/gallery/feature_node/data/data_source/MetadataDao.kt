@@ -21,6 +21,15 @@ data class PendingMetadataLocation(
     val gpsLongitude: Double,
 )
 
+data class GeocodedMetadataLocation(
+    val mediaId: Long,
+    val latitude: Double,
+    val longitude: Double,
+    val locationName: String?,
+    val country: String?,
+    val city: String?,
+)
+
 @Dao
 interface MetadataDao {
 
@@ -160,6 +169,16 @@ interface MetadataDao {
         country: String?,
         city: String?,
     ): Int
+
+    @Transaction
+    suspend fun updateGeocodedLocations(locations: List<GeocodedMetadataLocation>): Int {
+        var updated = 0
+        for (item in locations) {
+            updated += updateGeocodedLocation(item.mediaId, item.latitude, item.longitude,
+                item.locationName, item.country, item.city)
+        }
+        return updated
+    }
 
     @Query(
         """

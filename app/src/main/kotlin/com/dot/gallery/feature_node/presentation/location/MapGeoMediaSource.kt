@@ -5,6 +5,8 @@
 
 package com.dot.gallery.feature_node.presentation.location
 
+import android.content.Context
+import com.dot.gallery.R
 import com.dot.gallery.cloud.core.CloudMapMarker
 import com.dot.gallery.cloud.core.ConnectionState
 import com.dot.gallery.cloud.core.ProviderRegistry
@@ -19,7 +21,9 @@ import com.dot.gallery.feature_node.domain.model.Media
 import com.dot.gallery.feature_node.domain.model.MediaState
 import com.dot.gallery.feature_node.domain.model.locationCoordinateGroupKey
 import com.dot.gallery.feature_node.domain.model.locationIdentityKey
-import com.dot.gallery.feature_node.domain.util.isCloud
+import com.dot.gallery.feature_node.domain.model.matchesLocationCoordinates
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -27,6 +31,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import java.util.Locale
 import javax.inject.Inject
@@ -63,6 +68,7 @@ class MapGeoMediaSource @Inject constructor(
     private val providerRegistry: ProviderRegistry,
     private val cloudMediaDao: CloudMediaDao,
     private val cloudServerConfigDao: CloudServerConfigDao,
+    @ApplicationContext private val appContext: Context,
 ) {
     private val activeConfigs = cloudServerConfigDao.getActive()
 
@@ -112,13 +118,18 @@ class MapGeoMediaSource @Inject constructor(
         timelineMedia,
     ) { local, cached, markers, timeline ->
         val timelineById = timeline.media.associateBy { it.id }
+        val mediaById = HashMap<Long, Media.UriMedia>(timeline.media.size)
+        timeline.media.forEach { mediaById[it.id] = it }
+        timeline.cloudBackups.values.forEach { copies ->
+            copies.forEach { mediaById.putIfAbsent(it.id, it) }
+        }
         val backupOwnerByCloudId = buildMap {
             timeline.cloudBackups.forEach { (localId, copies) ->
                 copies.forEach { put(it.id, localId) }
             }
         }
         val result = LinkedHashMap<Long, GeoMedia>()
-        mergeAccountQualifiedGeoMedia(local, cached, markers).forEach { item ->
+        mergeAccountQualifiedGeoMedia(local, cached, markers, mediaById).forEach { item ->
             val resolved = when (val ownerId = backupOwnerByCloudId[item.mediaId]) {
                 null -> timelineById[item.mediaId]?.let { item.copy(media = it) }
                 else -> timelineById[ownerId]?.let { item.copy(mediaId = ownerId, media = it) }
@@ -130,7 +141,7 @@ class MapGeoMediaSource @Inject constructor(
             if (existing == null || hasName && !existingHasName) result[resolved.mediaId] = resolved
         }
         result.values.sortedByDescending { it.media.definedTimestamp }
-    }
+    }.distinctUntilChanged().flowOn(Dispatchers.Default)
 
     fun mergedLocations(
         localLocations: Flow<List<LocationMedia>>,
@@ -143,6 +154,7 @@ class MapGeoMediaSource @Inject constructor(
         timelineMedia,
     ) { local, geo, cached, timeline ->
         val timelineById = timeline.media.associateBy { it.id }
+        val unknownLocation = appContext.getString(R.string.unknown_location)
         val backupOwnerByCloudId = buildMap {
             timeline.cloudBackups.forEach { (localId, copies) ->
                 copies.forEach { put(it.id, localId) }
@@ -156,7 +168,9 @@ class MapGeoMediaSource @Inject constructor(
             if (city == null && country == null) return@mapNotNull null
             LocationMedia(
                 media = owner,
-                location = locationLabel(city, country, entity.latitude, entity.longitude),
+                location = locationLabel(
+                    city, country, entity.latitude, entity.longitude, unknownLocation
+                ),
                 city = city,
                 country = country,
                 latitude = entity.latitude,
@@ -167,19 +181,32 @@ class MapGeoMediaSource @Inject constructor(
             localLocations = backupLocations + local.filter { it.media.id in timelineById },
             geoMedia = geo,
             cachedCloudMedia = cached.filter { it.globalMediaId in timelineById },
+            mediaById = timelineById,
+            unknownLocationLabel = unknownLocation,
         )
-    }
+    }.distinctUntilChanged().flowOn(Dispatchers.Default)
 }
 
 internal fun mergeAccountQualifiedGeoMedia(
     localGeoMedia: List<GeoMedia>,
     cachedCloudMedia: List<CloudMediaEntity>,
     liveMarkers: List<AccountCloudMapMarker>,
+    mediaById: Map<Long, Media.UriMedia> = emptyMap(),
 ): List<GeoMedia> {
     val result = LinkedHashMap<Long, GeoMedia>()
-    localGeoMedia.asSequence()
-        .filterNot { it.media.isCloud }
-        .forEach { result[it.mediaId] = it }
+    localGeoMedia.forEach {
+        if (validCoordinates(it.latitude, it.longitude)) result[it.mediaId] = it
+    }
+
+    fun add(item: GeoMedia) {
+        val existing = result[item.mediaId]?.takeIf {
+            matchesLocationCoordinates(it.latitude, it.longitude, item.latitude, item.longitude)
+        }
+        result[item.mediaId] = item.copy(
+            locationCity = item.locationCity?.takeIf(String::isNotBlank) ?: existing?.locationCity,
+            locationCountry = item.locationCountry?.takeIf(String::isNotBlank) ?: existing?.locationCountry,
+        )
+    }
 
     val cachedByKey: Map<CloudMapAssetKey, CloudMediaEntity> = cachedCloudMedia.associateBy { entity ->
         CloudMapAssetKey(entity.providerType, entity.serverConfigId, entity.remoteId)
@@ -188,18 +215,27 @@ internal fun mergeAccountQualifiedGeoMedia(
         val latitude = entity.latitude
         val longitude = entity.longitude
         if (latitude != null && longitude != null && validCoordinates(latitude, longitude)) {
-            result[entity.globalMediaId] = entity.toGeoMedia(latitude, longitude)
+            add(
+                entity.toGeoMedia(
+                    latitude = latitude,
+                    longitude = longitude,
+                    media = mediaById[entity.globalMediaId] ?: entity.toUriMedia(),
+                )
+            )
         }
     }
     liveMarkers.forEach { accountMarker ->
         val marker = accountMarker.marker
         if (!validCoordinates(marker.latitude, marker.longitude)) return@forEach
         val entity = cachedByKey[accountMarker.key] ?: return@forEach
-        result[entity.globalMediaId] = entity.toGeoMedia(
-            latitude = marker.latitude,
-            longitude = marker.longitude,
-            city = marker.city?.takeIf(String::isNotBlank) ?: entity.city,
-            country = marker.country?.takeIf(String::isNotBlank) ?: entity.country,
+        add(
+            entity.toGeoMedia(
+                latitude = marker.latitude,
+                longitude = marker.longitude,
+                city = marker.city?.takeIf(String::isNotBlank) ?: entity.city,
+                country = marker.country?.takeIf(String::isNotBlank) ?: entity.country,
+                media = mediaById[entity.globalMediaId] ?: entity.toUriMedia(),
+            )
         )
     }
     return result.values.sortedByDescending { it.media.definedTimestamp }
@@ -209,6 +245,8 @@ internal fun buildActionableLocations(
     localLocations: List<LocationMedia>,
     geoMedia: List<GeoMedia>,
     cachedCloudMedia: List<CloudMediaEntity>,
+    mediaById: Map<Long, Media.UriMedia> = emptyMap(),
+    unknownLocationLabel: String = "Unknown Location",
 ): List<LocationMedia> {
     val locationByMediaId = LinkedHashMap<Long, LocationMedia>()
 
@@ -228,8 +266,10 @@ internal fun buildActionableLocations(
         if (city == null && country == null) return@forEach
         addMedia(
             LocationMedia(
-                media = entity.toUriMedia(),
-                location = locationLabel(city, country, entity.latitude, entity.longitude),
+                media = mediaById[entity.globalMediaId] ?: entity.toUriMedia(),
+                location = locationLabel(
+                    city, country, entity.latitude, entity.longitude, unknownLocationLabel
+                ),
                 city = city,
                 country = country,
                 latitude = entity.latitude,
@@ -242,7 +282,9 @@ internal fun buildActionableLocations(
         val country = item.country?.trim()?.takeIf(String::isNotBlank)
         addMedia(
             item.copy(
-                location = locationLabel(city, country, item.latitude, item.longitude),
+                location = locationLabel(
+                    city, country, item.latitude, item.longitude, unknownLocationLabel
+                ),
                 city = city,
                 country = country,
             )
@@ -254,7 +296,9 @@ internal fun buildActionableLocations(
         addMedia(
             LocationMedia(
                 media = item.media,
-                location = locationLabel(city, country, item.latitude, item.longitude),
+                location = locationLabel(
+                    city, country, item.latitude, item.longitude, unknownLocationLabel
+                ),
                 city = city,
                 country = country,
                 latitude = item.latitude,
@@ -285,31 +329,33 @@ private fun CloudMediaEntity.toGeoMedia(
     longitude: Double,
     city: String? = this.city,
     country: String? = this.country,
+    media: Media.UriMedia = toUriMedia(),
 ): GeoMedia = GeoMedia(
     mediaId = globalMediaId,
     latitude = latitude,
     longitude = longitude,
     locationCity = city,
     locationCountry = country,
-    media = toUriMedia(),
+    media = media,
 )
 
 private fun validCoordinates(latitude: Double, longitude: Double): Boolean =
     latitude.isFinite() && longitude.isFinite() && latitude in -90.0..90.0 && longitude in -180.0..180.0
 
-private fun locationLabel(
+internal fun locationLabel(
     city: String?,
     country: String?,
     latitude: Double?,
     longitude: Double?,
+    unknownLocationLabel: String = "Unknown Location",
 ): String {
     val named = listOfNotNull(
         city?.trim()?.takeIf(String::isNotBlank),
         country?.trim()?.takeIf(String::isNotBlank),
     ).joinToString(", ")
     if (named.isNotBlank()) return named
-    if (latitude != null && longitude != null) {
-        return String.format(Locale.getDefault(), "%.4f, %.4f", latitude, longitude)
-    }
-    return "Unknown location"
+    if (latitude != null && longitude != null && validCoordinates(latitude, longitude) &&
+        (latitude != 0.0 || longitude != 0.0)
+    ) return String.format(Locale.getDefault(), "%.4f, %.4f", latitude, longitude)
+    return unknownLocationLabel
 }

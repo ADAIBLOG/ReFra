@@ -6,6 +6,7 @@
 package com.dot.gallery.cloud.data.entity
 
 import android.net.Uri
+import android.text.format.DateFormat
 import androidx.core.net.toUri
 import androidx.room.ColumnInfo
 import androidx.room.Entity
@@ -15,8 +16,14 @@ import com.dot.gallery.cloud.core.SyncState
 import com.dot.gallery.cloud.core.cloudMediaId
 import com.dot.gallery.core.Constants
 import com.dot.gallery.feature_node.domain.model.Media
+import com.dot.gallery.feature_node.presentation.util.getCurrentAndroid
 import com.dot.gallery.feature_node.presentation.util.getDate
 import java.util.Base64
+import java.util.Calendar
+import java.util.Locale
+import java.util.TimeZone
+
+import androidx.compose.ui.text.intl.Locale as ComposeLocale
 
 @Entity(
     tableName = "cloud_media",
@@ -84,7 +91,7 @@ data class CloudMediaEntity(
         }
     }
 
-    fun toUriMedia(): Media.UriMedia {
+    fun toUriMedia(fullDate: String? = null): Media.UriMedia {
         val base = "cloud://${providerType.name}/$remoteId?size=preview"
         // Thread the server's numeric file id through the URI so the image
         // pipelines (Sketch/Glide) can request server-side video previews,
@@ -116,7 +123,7 @@ data class CloudMediaEntity(
             albumLabel = displayName,
             timestamp = timestampSeconds,
             takenTimestamp = takenTimestamp,
-            fullDate = displayDateSeconds.getDate(Constants.EXTENDED_DATE_FORMAT),
+            fullDate = fullDate ?: displayDateSeconds.getDate(Constants.EXTENDED_DATE_FORMAT),
             mimeType = mimeType,
             favorite = if (favorite) 1 else 0,
             trashed = if (trashed) 1 else 0,
@@ -129,6 +136,47 @@ data class CloudMediaEntity(
         const val CLOUD_ALBUM_ID = -500L
     }
 }
+
+internal class CloudMediaSnapshotMapper {
+    private data class Entry(val source: CloudMediaEntity, val media: Media.UriMedia)
+    private var entries = emptyMap<Long, Entry>()
+    private var locale: Locale? = null
+    private var timeZone: TimeZone? = null
+
+    fun map(source: List<CloudMediaEntity>): List<Media.UriMedia> {
+        val currentLocale = ComposeLocale.getCurrentAndroid()
+        val currentTimeZone = TimeZone.getDefault()
+        val sameFormatting = locale == currentLocale && timeZone?.id == currentTimeZone.id &&
+            timeZone?.hasSameRules(currentTimeZone) == true
+        val calendar by lazy { Calendar.getInstance(currentTimeZone, currentLocale) }
+        val next = HashMap<Long, Entry>(source.size)
+        val result = ArrayList<Media.UriMedia>(source.size)
+        for (entity in source) {
+            val previous = entries[entity.globalMediaId]
+            val entry = if (sameFormatting && previous != null &&
+                previous.source.hasSameMediaPresentation(entity)
+            ) previous else {
+                calendar.timeInMillis = (entity.takenTimestamp?.let { it / 1000L }
+                    ?: (entity.timestamp / 1000L)) * 1000L
+                val date = DateFormat.format(Constants.EXTENDED_DATE_FORMAT, calendar).toString()
+                Entry(entity, entity.toUriMedia(fullDate = date))
+            }
+            next[entity.globalMediaId] = entry
+            result += entry.media
+        }
+        entries = next
+        locale = currentLocale
+        timeZone = currentTimeZone
+        return result
+    }
+}
+
+private fun CloudMediaEntity.hasSameMediaPresentation(other: CloudMediaEntity): Boolean =
+    globalMediaId == other.globalMediaId && providerType == other.providerType &&
+    serverConfigId == other.serverConfigId && remoteId == other.remoteId && fileId == other.fileId &&
+    label == other.label && path == other.path && relativePath == other.relativePath &&
+    mimeType == other.mimeType && timestamp == other.timestamp && takenTimestamp == other.takenTimestamp &&
+    size == other.size && duration == other.duration && favorite == other.favorite && trashed == other.trashed
 
 @Entity(
     tableName = "cloud_backup_revision",
