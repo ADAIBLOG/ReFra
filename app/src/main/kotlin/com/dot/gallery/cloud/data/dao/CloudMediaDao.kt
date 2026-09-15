@@ -159,6 +159,9 @@ interface CloudMediaDao {
     @Query("SELECT * FROM cloud_media WHERE globalMediaId = :globalMediaId LIMIT 1")
     suspend fun getByGlobalMediaId(globalMediaId: Long): CloudMediaEntity?
 
+    @Query("SELECT * FROM cloud_media WHERE globalMediaId IN (:ids) AND trashed = 0 AND archived = 0")
+    fun observeByGlobalMediaIds(ids: List<Long>): Flow<List<CloudMediaEntity>>
+
     @Query(
         """
         SELECT * FROM cloud_media

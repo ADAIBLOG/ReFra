@@ -12,6 +12,7 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import androidx.room.Room
 import com.dot.gallery.core.metrics.StartupTracer
+import com.dot.gallery.core.startup.StartupWorkGate
 import com.dot.gallery.feature_node.data.data_source.InternalDatabase
 import com.dot.gallery.feature_node.data.data_source.migration.MIGRATION_12_13
 import com.dot.gallery.feature_node.data.data_source.migration.MIGRATION_33_34
@@ -34,6 +35,7 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import kotlinx.coroutines.runBlocking
 
 /**
  * Creates a Room [InternalDatabase] backed by SQLCipher encryption.
@@ -54,7 +56,7 @@ object EncryptedDatabaseFactory {
     private const val GCM_TAG_LENGTH = 128
     private const val PREF_RAW_KEY_MIGRATED = "raw_key_migrated"
 
-    fun create(context: Context): InternalDatabase {
+    fun create(context: Context, startupGate: StartupWorkGate? = null): InternalDatabase {
         val createSpan = StartupTracer.begin("EncryptedDB.create")
 
         StartupTracer.trace("EncryptedDB.loadLibrary") {
@@ -124,6 +126,9 @@ object EncryptedDatabaseFactory {
             // Disable secure memory wiping — reduces per-page alloc/free overhead.
             // Safe for a gallery app where the DB key is already in process memory.
             try { rawDb.query("PRAGMA cipher_memory_security = OFF").close() } catch (_: Exception) {}
+            if (startupGate != null) {
+                runBlocking { startupGate.awaitFirstContent() }
+            }
             // Warm SQLCipher's page cache by reading catalog + data tables.
             // Without this, the first Room query pays ~1.3s of cold-cache
             // overhead decrypting system pages from disk.

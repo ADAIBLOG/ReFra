@@ -92,6 +92,7 @@ import com.dot.gallery.core.Settings.Misc.rememberAllowBlur
 import com.dot.gallery.core.Settings.Misc.rememberNoClassification
 import com.dot.gallery.core.ml.ModelStatus
 import com.dot.gallery.core.navigate
+import com.dot.gallery.core.startup.StartupContentEffect
 import com.dot.gallery.core.util.SdkCompat
 import com.dot.gallery.feature_node.domain.util.getUri
 import com.dot.gallery.feature_node.presentation.common.components.GridPinchZoomLayout
@@ -158,9 +159,14 @@ fun LibraryScreen(
     val indicatorState by viewModel.indicatorState.collectAsStateWithLifecycle()
 
     // New category system
-    val topCategories by viewModel.topCategories.collectAsStateWithLifecycle()
+    val categoryItems by viewModel.topCategories.collectAsStateWithLifecycle()
+    val topCategories = categoryItems.orEmpty()
     val totalCategoryCount by viewModel.totalCategoryCount.collectAsStateWithLifecycle()
-    val noCategoriesFound by rememberedDerivedState { topCategories.isEmpty() }
+    val noCategoriesFound = noCategories(categoryItems)
+    StartupContentEffect(
+        route = Screen.LibraryScreen(),
+        ready = categoriesLoaded(categoryItems)
+    )
 
     // Locations
     val noLocationsFound by rememberedDerivedState { locations.isEmpty() }

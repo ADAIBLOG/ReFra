@@ -10,7 +10,9 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.platform.LocalContext
+import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -19,6 +21,10 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 
+val LocalInitialPreferences = staticCompositionLocalOf<Preferences?> { null }
+
+val LocalPreferenceStore = staticCompositionLocalOf<DataStore<Preferences>?> { null }
+
 @Composable
 fun <T> rememberPreference(
     key: Preferences.Key<T>,
@@ -26,10 +32,12 @@ fun <T> rememberPreference(
 ): MutableState<T> {
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
-    val state by remember {
-        context.activeDataStore.data
+    val store = LocalPreferenceStore.current ?: context.activeDataStore
+    val initial = LocalInitialPreferences.current?.get(key) ?: defaultValue
+    val state by remember(store, key, defaultValue) {
+        store.data
             .map { it[key] ?: defaultValue }
-    }.collectAsStateWithLifecycle(initialValue = defaultValue)
+    }.collectAsStateWithLifecycle(initialValue = initial)
 
     return remember(state) {
         object : MutableState<T> {
@@ -37,7 +45,7 @@ fun <T> rememberPreference(
                 get() = state
                 set(value) {
                     coroutineScope.launch {
-                        context.activeDataStore.edit {
+                        store.edit {
                             it[key] = value
                         }
                     }
@@ -56,10 +64,13 @@ inline fun <reified T> rememberPreferenceSerializable(
 ): MutableState<T> {
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
-    val state by remember {
-        context.activeDataStore.data
+    val store = LocalPreferenceStore.current ?: context.activeDataStore
+    val initial = LocalInitialPreferences.current?.get(keyString)
+        ?: Json.encodeToString(defaultValue)
+    val state by remember(store, keyString, defaultValue) {
+        store.data
             .map { it[keyString] ?: Json.encodeToString(defaultValue) }
-    }.collectAsStateWithLifecycle(initialValue = Json.encodeToString(defaultValue))
+    }.collectAsStateWithLifecycle(initialValue = initial)
 
     return remember(state) {
         object : MutableState<T> {
@@ -67,7 +78,7 @@ inline fun <reified T> rememberPreferenceSerializable(
                 get() = Json.decodeFromString(state)
                 set(value) {
                     coroutineScope.launch {
-                        context.activeDataStore.edit {
+                        store.edit {
                             it[keyString] = Json.encodeToString(value)
                         }
                     }

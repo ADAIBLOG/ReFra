@@ -66,6 +66,8 @@ interface MediaRepository {
 
     fun getAlbums(mediaOrder: MediaOrder): Flow<Resource<List<Album>>>
 
+    fun getCategoryThumbnailMedia(ids: List<Long>): Flow<List<UriMedia>>
+
     fun getAlbum(albumId: Long): Flow<Resource<Album>>
 
     suspend fun insertPinnedAlbum(pinnedAlbum: PinnedAlbum)

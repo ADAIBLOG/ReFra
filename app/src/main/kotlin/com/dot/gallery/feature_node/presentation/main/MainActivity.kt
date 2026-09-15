@@ -26,26 +26,36 @@ import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.compose.rememberNavController
+import androidx.datastore.preferences.core.emptyPreferences
 import com.dot.gallery.core.Constants
 import com.dot.gallery.core.MediaDistributor
 import com.dot.gallery.core.MediaHandler
 import com.dot.gallery.core.MediaSelector
 import com.dot.gallery.core.LocalScrollToTop
 import com.dot.gallery.core.ScrollToTopController
+import com.dot.gallery.core.Settings
 import com.dot.gallery.core.Settings.Misc.getSecureMode
+import com.dot.gallery.core.activeDataStore
 import com.dot.gallery.core.presentation.components.util.permissionGranted
 import com.dot.gallery.core.Settings.Misc.rememberAllowBlur
 import com.dot.gallery.core.Settings.Misc.rememberForceTheme
 import com.dot.gallery.core.Settings.Misc.rememberIsDarkMode
 import com.dot.gallery.core.presentation.components.AppBarContainer
 import com.dot.gallery.core.presentation.components.NavigationComp
+import com.dot.gallery.core.startup.LocalStartupWorkGate
+import com.dot.gallery.core.startup.StartupContentEffect
+import com.dot.gallery.core.startup.StartupPrefill
+import com.dot.gallery.core.startup.StartupWorkGate
+import com.dot.gallery.core.util.LocalInitialPreferences
 import com.dot.gallery.core.util.SetupMediaProviders
 import com.dot.gallery.feature_node.domain.model.UIEvent
 import com.dot.gallery.feature_node.domain.util.EventHandler
 import com.dot.gallery.feature_node.presentation.util.LocalHazeState
+import com.dot.gallery.feature_node.presentation.util.printWarning
 import com.dot.gallery.feature_node.presentation.util.toggleOrientation
 import com.dot.gallery.ui.theme.GalleryTheme
 import com.dot.gallery.core.image.thumbnail.ThumbnailTelemetry
@@ -55,8 +65,12 @@ import dev.chrisbanes.haze.LocalHazeStyle
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
 import dev.chrisbanes.haze.materials.HazeMaterials
 import dev.chrisbanes.haze.rememberHazeState
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.IOException
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -70,13 +84,18 @@ class MainActivity : AppCompatActivity() {
     lateinit var mediaHandler: MediaHandler
     @Inject
     lateinit var mediaSelector: MediaSelector
+    @Inject
+    lateinit var startupWorkGate: StartupWorkGate
+    @Inject
+    lateinit var startupPrefill: StartupPrefill
+
+    private var startupContentInstalled = false
 
     @OptIn(ExperimentalHazeMaterialsApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         val activitySpan = StartupTracer.begin("MainActivity.onCreate")
-        StartupTracer.trace("MainActivity.installSplashScreen") {
-            installSplashScreen()
-        }
+        val splashScreen = StartupTracer.trace("MainActivity.installSplashScreen") { installSplashScreen() }
+        splashScreen.setKeepOnScreenCondition { !startupContentInstalled }
         StartupTracer.trace("MainActivity.super.onCreate (Hilt DI)") {
             super.onCreate(savedInstanceState)
         }
@@ -89,115 +108,150 @@ class MainActivity : AppCompatActivity() {
             mediaDistributor.hasPermission.value = true
         }
         StartupTracer.end(activitySpan)
-        setContent {
-            StartupTracer.trace("MainActivity.firstComposition") {}
-            GalleryTheme {
-                LaunchedEffect(Unit) {
-                    StartupTracer.trace("MainActivity.firstFrame") {}
-                    StartupTracer.dump()
+        lifecycleScope.launch {
+            val initialPreferences = withContext(Dispatchers.IO) {
+                try {
+                    activeDataStore.data.first()
+                } catch (e: IOException) {
+                    printWarning("MainActivity: failed to read initial preferences (${e.javaClass.simpleName})")
+                    emptyPreferences()
                 }
-                val allowBlur by rememberAllowBlur()
-                val hazeState = rememberHazeState(
-                    blurEnabled = allowBlur
-                )
-                val navController = rememberNavController()
-                val isScrolling = remember { mutableStateOf(false) }
-                val bottomBarState = rememberSaveable { mutableStateOf(true) }
-                val systemBarFollowThemeState = rememberSaveable { mutableStateOf(true) }
-                val forcedTheme by rememberForceTheme()
-                val localDarkTheme by rememberIsDarkMode()
-                val systemDarkTheme = isSystemInDarkTheme()
-                val darkTheme by remember(forcedTheme, localDarkTheme, systemDarkTheme) {
-                    mutableStateOf(if (forcedTheme) localDarkTheme else systemDarkTheme)
-                }
-                LaunchedEffect(eventHandler, navController) {
-                    lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                        val navigateAction: (String) -> Unit = { route ->
-                            navController.navigate(route) {
-                                launchSingleTop = true
-                                restoreState = true
-                            }
-                        }
-                        val toggleNavigationBarAction: (Boolean) -> Unit = { isVisible ->
-                            bottomBarState.value = isVisible
-                        }
-                        val navigateUpAction: () -> Unit = { navController.navigateUp() }
-                        val setFollowThemeAction: (Boolean) -> Unit = { followTheme ->
-                            systemBarFollowThemeState.value = followTheme
-                        }
-                        eventHandler.navigateAction = navigateAction
-                        eventHandler.toggleNavigationBarAction = toggleNavigationBarAction
-                        eventHandler.navigateUpAction = navigateUpAction
-                        eventHandler.setFollowThemeAction = setFollowThemeAction
-                        try {
-                            eventHandler.updaterFlow.collect { event ->
-                                when (event) {
-                                    UIEvent.UpdateDatabase -> Unit
-                                    UIEvent.NavigationUpEvent -> eventHandler.navigateUpAction()
-                                    is UIEvent.NavigationRouteEvent -> eventHandler.navigateAction(event.route)
-                                    is UIEvent.ToggleNavigationBarEvent ->
-                                        eventHandler.toggleNavigationBarAction(event.isVisible)
-                                    is UIEvent.SetFollowThemeEvent ->
-                                        eventHandler.setFollowThemeAction(event.followTheme)
-                                }
-                            }
-                        } finally {
-                            eventHandler.navigateAction = {}
-                            eventHandler.toggleNavigationBarAction = {}
-                            eventHandler.navigateUpAction = {}
-                            eventHandler.setFollowThemeAction = {}
-                        }
-                    }
-                }
-                LaunchedEffect(darkTheme, systemBarFollowThemeState.value) {
-                    enableEdgeToEdge(
-                        statusBarStyle = SystemBarStyle.auto(
-                            Color.TRANSPARENT,
-                            Color.TRANSPARENT,
-                        ) { darkTheme || !systemBarFollowThemeState.value },
-                        navigationBarStyle = SystemBarStyle.auto(
-                            Color.TRANSPARENT,
-                            Color.TRANSPARENT,
-                        ) { darkTheme || !systemBarFollowThemeState.value }
-                    )
-                }
-                val scrollToTopController = remember { ScrollToTopController() }
+            }
+            if (Settings.Misc.secureMode(initialPreferences)) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            }
+            val initialStartDestination = Settings.Misc.startupDestination(
+                initialPreferences,
+                permissionGranted(Constants.PERMISSIONS)
+            )
+            startupPrefill.prepare(initialStartDestination)
+            setContent {
+                StartupTracer.trace("MainActivity.firstComposition") {}
+                val preferences by remember {
+                    activeDataStore.data
+                }.collectAsStateWithLifecycle(initialValue = initialPreferences)
                 CompositionLocalProvider(
-                    LocalHazeState provides hazeState,
-                    LocalScrollToTop provides scrollToTopController,
-                    LocalHazeStyle provides HazeMaterials.regular(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-                    )
+                    LocalInitialPreferences provides preferences,
+                    LocalStartupWorkGate provides startupWorkGate
                 ) {
-                    SetupMediaProviders(
-                        eventHandler = eventHandler,
-                        mediaDistributor = mediaDistributor,
-                        mediaHandler = mediaHandler,
-                        mediaSelector = mediaSelector
-                    ) {
-                        Scaffold(
-                            modifier = Modifier.fillMaxSize(),
-                            content = { paddingValues ->
-                                AppBarContainer(
-                                    navController = navController,
-                                    paddingValues = paddingValues,
-                                    bottomBarState = bottomBarState.value,
-                                    isScrolling = isScrolling.value
-                                ) {
-                                    NavigationComp(
-                                        navController = navController,
-                                        paddingValues = paddingValues,
-                                        bottomBarState = bottomBarState,
-                                        systemBarFollowThemeState = systemBarFollowThemeState,
-                                        toggleRotate = ::toggleOrientation,
-                                        isScrolling = isScrolling
-                                    )
+                    GalleryTheme {
+                        LaunchedEffect(Unit) {
+                            StartupTracer.trace("MainActivity.firstCompositionApplied") {}
+                            StartupTracer.dump()
+                        }
+                        StartupContentEffect(
+                            route = "MainActivity",
+                            ready = true,
+                            releaseGate = false,
+                            committedLabel = "MainActivity.firstFrameCommitted",
+                            drawnLabel = "MainActivity.firstDrawn"
+                        )
+                        val allowBlur by rememberAllowBlur()
+                        val hazeState = rememberHazeState(
+                            blurEnabled = allowBlur
+                        )
+                        val navController = rememberNavController()
+                        val isScrolling = remember { mutableStateOf(false) }
+                        val bottomBarState = rememberSaveable { mutableStateOf(true) }
+                        val systemBarFollowThemeState = rememberSaveable { mutableStateOf(true) }
+                        val forcedTheme by rememberForceTheme()
+                        val localDarkTheme by rememberIsDarkMode()
+                        val systemDarkTheme = isSystemInDarkTheme()
+                        val darkTheme by remember(forcedTheme, localDarkTheme, systemDarkTheme) {
+                            mutableStateOf(if (forcedTheme) localDarkTheme else systemDarkTheme)
+                        }
+                        LaunchedEffect(eventHandler, navController) {
+                            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                                val navigateAction: (String) -> Unit = { route ->
+                                    navController.navigate(route) {
+                                        launchSingleTop = true
+                                        restoreState = true
+                                    }
+                                }
+                                val toggleNavigationBarAction: (Boolean) -> Unit = { isVisible ->
+                                    bottomBarState.value = isVisible
+                                }
+                                val navigateUpAction: () -> Unit = { navController.navigateUp() }
+                                val setFollowThemeAction: (Boolean) -> Unit = { followTheme ->
+                                    systemBarFollowThemeState.value = followTheme
+                                }
+                                eventHandler.navigateAction = navigateAction
+                                eventHandler.toggleNavigationBarAction = toggleNavigationBarAction
+                                eventHandler.navigateUpAction = navigateUpAction
+                                eventHandler.setFollowThemeAction = setFollowThemeAction
+                                try {
+                                    eventHandler.updaterFlow.collect { event ->
+                                        when (event) {
+                                            UIEvent.UpdateDatabase -> Unit
+                                            UIEvent.NavigationUpEvent -> eventHandler.navigateUpAction()
+                                            is UIEvent.NavigationRouteEvent -> eventHandler.navigateAction(event.route)
+                                            is UIEvent.ToggleNavigationBarEvent ->
+                                                eventHandler.toggleNavigationBarAction(event.isVisible)
+                                            is UIEvent.SetFollowThemeEvent ->
+                                                eventHandler.setFollowThemeAction(event.followTheme)
+                                        }
+                                    }
+                                } finally {
+                                    eventHandler.navigateAction = {}
+                                    eventHandler.toggleNavigationBarAction = {}
+                                    eventHandler.navigateUpAction = {}
+                                    eventHandler.setFollowThemeAction = {}
                                 }
                             }
-                        )
+                        }
+                        LaunchedEffect(darkTheme, systemBarFollowThemeState.value) {
+                            enableEdgeToEdge(
+                                statusBarStyle = SystemBarStyle.auto(
+                                    Color.TRANSPARENT,
+                                    Color.TRANSPARENT,
+                                ) { darkTheme || !systemBarFollowThemeState.value },
+                                navigationBarStyle = SystemBarStyle.auto(
+                                    Color.TRANSPARENT,
+                                    Color.TRANSPARENT,
+                                ) { darkTheme || !systemBarFollowThemeState.value }
+                            )
+                        }
+                        val scrollToTopController = remember { ScrollToTopController() }
+                        CompositionLocalProvider(
+                            LocalHazeState provides hazeState,
+                            LocalScrollToTop provides scrollToTopController,
+                            LocalHazeStyle provides HazeMaterials.regular(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                            )
+                        ) {
+                            SetupMediaProviders(
+                                eventHandler = eventHandler,
+                                mediaDistributor = mediaDistributor,
+                                mediaHandler = mediaHandler,
+                                mediaSelector = mediaSelector
+                            ) {
+                                Scaffold(
+                                    modifier = Modifier.fillMaxSize(),
+                                    content = { paddingValues ->
+                                        AppBarContainer(
+                                            navController = navController,
+                                            paddingValues = paddingValues,
+                                            bottomBarState = bottomBarState.value,
+                                            isScrolling = isScrolling.value
+                                        ) {
+                                            NavigationComp(
+                                                navController = navController,
+                                                paddingValues = paddingValues,
+                                                bottomBarState = bottomBarState,
+                                                systemBarFollowThemeState = systemBarFollowThemeState,
+                                                toggleRotate = ::toggleOrientation,
+                                                isScrolling = isScrolling,
+                                                initialStartDestination = initialStartDestination
+                                            )
+                                        }
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
             }
+            startupContentInstalled = true
         }
     }
 

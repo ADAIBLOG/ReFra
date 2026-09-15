@@ -39,6 +39,18 @@ private fun mediaBucketQuery(bucketCount: Int): Query? = List(bucketCount) {
 internal fun mediaBucketSelection(bucketCount: Int): String =
     mediaBucketQuery(bucketCount)?.build().orEmpty()
 
+internal const val MEDIA_IDS_MAX = 100
+
+internal fun validatedMediaIds(mediaIds: Set<Long>?): List<Long>? {
+    if (mediaIds == null) return null
+    require(mediaIds.size <= MEDIA_IDS_MAX) { "mediaIds supports at most $MEDIA_IDS_MAX ids" }
+    require(mediaIds.all { it >= 0 }) { "mediaIds must be local MediaStore ids" }
+    return mediaIds.sorted()
+}
+
+internal fun mediaIdsQuery(orderedMediaIds: List<Long>): Query? =
+    List(orderedMediaIds.size) { MediaStore.Files.FileColumns._ID eq Query.ARG }.join(Query::or)
+
 /**
  * Media flow
  *
@@ -53,9 +65,13 @@ class MediaFlow(
     private val buckedId: Long,
     private val mimeType: String? = null,
     private val skipBatching: Boolean = false,
-    private val bucketIds: Set<Long> = setOf(buckedId)
+    private val bucketIds: Set<Long> = setOf(buckedId),
+    private val queryLimit: Int? = null,
+    private val mediaIds: Set<Long>? = null
 ) : QueryFlow<Media.UriMedia>() {
     init {
+        require(queryLimit == null || queryLimit > 0) { "queryLimit must be positive" }
+        validatedMediaIds(mediaIds)
         assert(buckedId != MediaStoreBuckets.MEDIA_STORE_BUCKET_PLACEHOLDER.id || bucketIds.isEmpty()) {
             "MEDIA_STORE_BUCKET_PLACEHOLDER found"
         }
@@ -63,6 +79,8 @@ class MediaFlow(
 
     override fun flowCursor(): Flow<Cursor?> {
         if (bucketIds.isEmpty()) return flowOf(null)
+        val orderedMediaIds = validatedMediaIds(mediaIds)
+        if (orderedMediaIds != null && orderedMediaIds.isEmpty()) return flowOf(null)
         // Trash and Favorites are not supported on API 29
         if (!SdkCompat.supportsTrash && buckedId == MediaStoreBuckets.MEDIA_STORE_BUCKET_TRASH.id) {
             return flowOf(null)
@@ -111,18 +129,25 @@ class MediaFlow(
         val mimeTypeQuery = rawMimeType?.let {
             MediaStore.Files.FileColumns.MIME_TYPE eq Query.ARG
         }
+        val idQuery = orderedMediaIds?.let(::mediaIdsQuery)
         val selection = listOfNotNull(
             imageOrVideo,
             albumFilter,
             mimeTypeQuery,
+            idQuery,
         ).join(Query::and)?.build()
         val selectionArgs = buildList {
             if (usesBucketFilter) addAll(orderedBucketIds.map(Long::toString))
             rawMimeType?.let(::add)
+            orderedMediaIds?.let { ids -> addAll(ids.map(Long::toString)) }
         }.toTypedArray()
 
-        val sortOrder = when (buckedId) {
-            MediaStoreBuckets.MEDIA_STORE_BUCKET_TRASH.id ->
+        val sortOrder = when {
+            queryLimit != null ->
+                "COALESCE(${MediaStore.Files.FileColumns.DATE_TAKEN} / 1000, " +
+                    "${MediaStore.Files.FileColumns.DATE_MODIFIED}) DESC, " +
+                    "${MediaStore.Files.FileColumns._ID} DESC"
+            buckedId == MediaStoreBuckets.MEDIA_STORE_BUCKET_TRASH.id ->
                 if (SdkCompat.supportsTrash) "${MediaStore.Files.FileColumns.DATE_EXPIRES} DESC"
                 else "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC"
 
@@ -133,6 +158,7 @@ class MediaFlow(
             putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
             putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selectionArgs)
             putString(ContentResolver.QUERY_ARG_SQL_SORT_ORDER, sortOrder)
+            queryLimit?.let { putString(ContentResolver.QUERY_ARG_SQL_LIMIT, it.toString()) }
 
             // Exclude trashed media unless we want data for the trashed album
             // QUERY_ARG_MATCH_TRASHED is only available on API 30+
@@ -147,7 +173,7 @@ class MediaFlow(
             }
         }
 
-        return if (skipBatching || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+        return if (queryLimit != null || skipBatching || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
              contentResolver.queryFlow(
                 uri,
                 projection,

@@ -23,6 +23,13 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.datastore.preferences.core.Preferences
 import androidx.room.withTransaction
 import androidx.work.WorkManager
+import com.dot.gallery.cloud.data.entity.CloudMediaEntity
+import com.dot.gallery.cloud.data.entity.CloudServerConfigEntity
+import com.dot.gallery.core.Constants
+import com.dot.gallery.core.presentation.components.util.hasMediaAccess
+import com.dot.gallery.core.startup.StartupMediaCache
+import com.dot.gallery.core.startup.StartupWorkGate
+import com.dot.gallery.core.startup.startupLoadFlow
 import com.dot.gallery.core.util.SdkCompat
 import com.dot.gallery.core.Resource
 import com.dot.gallery.core.activeDataStore
@@ -80,6 +87,7 @@ import com.dot.gallery.feature_node.domain.model.MediaCategory
 import com.dot.gallery.feature_node.domain.model.MediaMetadata
 import com.dot.gallery.feature_node.domain.model.MediaVersion
 import com.dot.gallery.feature_node.domain.model.metadataParsingPolicy
+import com.dot.gallery.feature_node.domain.model.shouldIgnore
 import com.dot.gallery.core.Settings
 import com.dot.gallery.core.sandbox.IsolatedMetadataParser
 import com.dot.gallery.feature_node.domain.model.LockedAlbum
@@ -122,8 +130,12 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -139,6 +151,25 @@ internal fun shouldUsePerFileMetadataIsolation(mode: String, bulk: Boolean): Boo
     else -> false
 }
 
+internal fun combineCategoryThumbnails(
+    local: List<UriMedia>,
+    cloud: List<CloudMediaEntity>,
+    activeConfigs: List<CloudServerConfigEntity>,
+    blacklisted: List<IgnoredAlbum>,
+    locked: List<LockedAlbum>,
+    hasMediaAccess: Boolean
+): List<UriMedia> {
+    val lockedIds = locked.mapTo(HashSet()) { it.id }
+    val activeConfigIds = activeConfigs.mapTo(HashSet()) { it.id }
+    val candidates = (if (hasMediaAccess) local else emptyList()) +
+        cloud
+            .filter { it.serverConfigId in activeConfigIds }
+            .map { it.toUriMedia() }
+    return candidates.filter { media ->
+        media.albumID !in lockedIds && blacklisted.none { it.shouldIgnore(media) }
+    }
+}
+
 class MediaRepositoryImpl(
     private val context: Context,
     private val workManager: WorkManager,
@@ -147,7 +178,9 @@ class MediaRepositoryImpl(
     private val geocoder: Geocoder?,
     private val isolatedParser: IsolatedMetadataParser,
     private val metadataSanitizer: MetadataSanitizer,
-    private val smartScanScheduler: SmartScanScheduler
+    private val smartScanScheduler: SmartScanScheduler,
+    private val startupCache: StartupMediaCache,
+    private val startupGate: StartupWorkGate
 ) : MediaRepository {
 
     private val contentResolver = context.contentResolver
@@ -189,14 +222,32 @@ class MediaRepositoryImpl(
     /**
      * TODO: Add media reordering
      */
+    private fun sortTimeline(media: List<UriMedia>): List<UriMedia> =
+        MediaOrder.Date(OrderType.Descending).sortMedia(media)
+
     @OptIn(ExperimentalCoroutinesApi::class)
-    override fun getMedia(): Flow<Resource<List<UriMedia>>> =
-        MediaFlow(
+    override fun getMedia(): Flow<Resource<List<UriMedia>>> = startupLoadFlow(
+        readCache = { startupCache.readMedia()?.let(::sortTimeline) },
+        boundedSource = {
+            sortTimeline(
+                MediaFlow(
+                    contentResolver = contentResolver,
+                    buckedId = MediaStoreBuckets.MEDIA_STORE_BUCKET_TIMELINE.id,
+                    skipBatching = true,
+                    queryLimit = STARTUP_MEDIA_LIMIT
+                ).flowData().first()
+            )
+        },
+        awaitFirstContent = startupGate::awaitFirstContent,
+        currentStamp = startupCache::currentStamp,
+        liveSource = MediaFlow(
             contentResolver = contentResolver,
-            buckedId = MediaStoreBuckets.MEDIA_STORE_BUCKET_TIMELINE.id
-        ).flowData().map {
-            Resource.Success(MediaOrder.Date(OrderType.Descending).sortMedia(it))
-        }.flowOn(Dispatchers.IO)
+            buckedId = MediaStoreBuckets.MEDIA_STORE_BUCKET_TIMELINE.id,
+            skipBatching = true
+        ).flowData().map(::sortTimeline),
+        writeCache = startupCache::writeMedia,
+        onLiveError = { printWarning("Startup media load failed (${it.javaClass.simpleName})") }
+    ).flowOn(Dispatchers.IO)
 
     override fun getCompleteMedia(): Flow<Resource<List<UriMedia>>> =
         MediaFlow(
@@ -234,16 +285,68 @@ class MediaRepositoryImpl(
             buckedId = MediaStoreBuckets.MEDIA_STORE_BUCKET_TRASH.id
         ).flowData().map { Resource.Success(it) }.flowOn(Dispatchers.IO)
 
-    override fun getAlbums(mediaOrder: MediaOrder): Flow<Resource<List<Album>>> =
-        AlbumsFlow(context).flowData().map {
-            withContext(Dispatchers.IO) {
-                val pinnedIds = database.getPinnedDao().getPinnedAlbumIds().toHashSet()
-                val data = it.map { album ->
-                    album.copy(isPinned = album.id in pinnedIds)
-                }
-                Resource.Success(mediaOrder.sortAlbums(data))
+    override fun getAlbums(mediaOrder: MediaOrder): Flow<Resource<List<Album>>> = startupLoadFlow(
+        readCache = { startupCache.readAlbums() },
+        boundedSource = null,
+        awaitFirstContent = startupGate::awaitFirstContent,
+        currentStamp = startupCache::currentStamp,
+        liveSource = AlbumsFlow(context).flowData(),
+        writeCache = startupCache::writeAlbums,
+        onLiveError = { printWarning("Startup albums load failed (${it.javaClass.simpleName})") },
+        errorMessage = "Failed to load albums"
+    ).map { resource ->
+        when (resource) {
+            is Resource.Success -> Resource.Success(
+                withPinnedAlbums(mediaOrder.sortAlbums(resource.data ?: emptyList()))
+            )
+            else -> resource
+        }
+    }.flowOn(Dispatchers.IO)
+
+    private suspend fun withPinnedAlbums(albums: List<Album>): List<Album> {
+        val pinnedIds = database.getPinnedDao().getPinnedAlbumIds().toHashSet()
+        return albums.map { album ->
+            album.copy(isPinned = album.id in pinnedIds)
+        }
+    }
+
+    override fun getCategoryThumbnailMedia(ids: List<Long>): Flow<List<UriMedia>> {
+        if (ids.isEmpty()) return flowOf(emptyList())
+        require(ids.size <= CATEGORY_THUMBNAIL_MAX_IDS) {
+            "getCategoryThumbnailMedia supports at most $CATEGORY_THUMBNAIL_MAX_IDS ids"
+        }
+        val localIds = ids.filter { it >= 0 }
+        val cloudIds = ids.filter { it < 0 }
+        val localFlow: Flow<List<UriMedia>> =
+            if (localIds.isEmpty() || !context.hasMediaAccess()) {
+                flowOf(emptyList())
+            } else {
+                MediaFlow(
+                    contentResolver = contentResolver,
+                    buckedId = MediaStoreBuckets.MEDIA_STORE_BUCKET_TIMELINE.id,
+                    skipBatching = true,
+                    mediaIds = localIds.toSet()
+                ).flowData()
             }
+        val cloudFlow: Flow<List<CloudMediaEntity>> =
+            if (cloudIds.isEmpty()) {
+                flowOf(emptyList())
+            } else {
+                database.getCloudMediaDao().observeByGlobalMediaIds(cloudIds)
+            }
+        return combine(
+            localFlow,
+            cloudFlow,
+            database.getCloudServerConfigDao().getActive(),
+            getBlacklistedAlbums(),
+            getLockedAlbums()
+        ) { local, cloud, activeConfigs, blacklisted, locked ->
+            combineCategoryThumbnails(
+                local, cloud, activeConfigs, blacklisted, locked,
+                hasMediaAccess = context.hasMediaAccess()
+            )
         }.flowOn(Dispatchers.IO)
+    }
 
     override fun getAlbum(albumId: Long): Flow<Resource<Album>> =
         AlbumsFlow(context).flowData().map {
@@ -1616,6 +1719,8 @@ class MediaRepositoryImpl(
 
     companion object {
         private const val SQLITE_BIND_CHUNK_SIZE = 900
+        private const val STARTUP_MEDIA_LIMIT = 250
+        private const val CATEGORY_THUMBNAIL_MAX_IDS = 100
 
         private fun relativePath(newPath: String) = ContentValues().apply {
             put(MediaStore.MediaColumns.RELATIVE_PATH, newPath)

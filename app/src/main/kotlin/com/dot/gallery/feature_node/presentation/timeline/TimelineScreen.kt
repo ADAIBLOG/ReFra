@@ -88,7 +88,10 @@ import com.dot.gallery.core.Settings.Misc.rememberTimelineLayoutType
 import com.dot.gallery.core.navigate
 import com.dot.gallery.core.presentation.components.EmptyMedia
 import com.dot.gallery.core.presentation.components.SelectionSheet
+import com.dot.gallery.core.startup.LocalStartupWorkGate
+import com.dot.gallery.core.startup.StartupContentEffect
 import com.dot.gallery.feature_node.domain.model.Album
+import com.dot.gallery.feature_node.domain.model.AlbumState
 import com.dot.gallery.feature_node.domain.model.Media
 import com.dot.gallery.feature_node.domain.model.MediaMetadataState
 import com.dot.gallery.feature_node.domain.model.MediaState
@@ -123,6 +126,8 @@ import com.dot.gallery.feature_node.presentation.util.roundSpToPx
 import com.dot.gallery.feature_node.presentation.util.selectedMedia
 import dev.chrisbanes.haze.hazeSource
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -184,7 +189,15 @@ fun TimelineScreen(
     var timelineFilter by remember { mutableStateOf(TimelineFilter()) }
     val filterSheetState = rememberAppBottomSheetState()
 
-    val albumsState = distributor.albumsFlow.collectAsStateWithLifecycle()
+    val startupGate = LocalStartupWorkGate.current
+    val filterAlbumsFlow = remember(startupGate, distributor) {
+        if (startupGate == null) distributor.albumsFlow
+        else flow {
+            startupGate.awaitFirstContent()
+            emitAll(distributor.albumsFlow)
+        }
+    }
+    val albumsState = filterAlbumsFlow.collectAsStateWithLifecycle(initialValue = AlbumState())
     val availableAlbums by rememberedDerivedState(albumsState.value) {
         albumsState.value.albums.filterableOnTimeline().sortedBy { it.label }
     }
@@ -261,6 +274,10 @@ fun TimelineScreen(
             weeklyDateFormat = dateFormats.third,
         ).copy(isLoading = source.isLoading)
     }
+    StartupContentEffect(
+        route = Screen.TimelineScreen(),
+        ready = !filteredMediaState.value.isLoading
+    )
     var lastSeenVersion by rememberLastSeenVersion()
     val showWhatsNew = remember(lastSeenVersion) { lastSeenVersion != BuildConfig.VERSION_NAME }
 

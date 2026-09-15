@@ -995,12 +995,27 @@ object Settings {
          * the wizard before navigating to the real start screen.
          */
         fun isSetupNeeded(context: Context): Boolean {
-            if (FORCE_SETUP_WIZARD) return true
-            val completed = runBlocking {
-                context.activeDataStore.data.first()[SETUP_COMPLETED_VERSION] ?: 0
+            val preferences = runBlocking {
+                context.activeDataStore.data.first()
             }
-            return completed < CURRENT_SETUP_VERSION
+            return isSetupNeeded(preferences)
         }
+
+        fun isSetupNeeded(preferences: Preferences): Boolean =
+            FORCE_SETUP_WIZARD || (preferences[SETUP_COMPLETED_VERSION] ?: 0) < CURRENT_SETUP_VERSION
+
+        fun startupDestination(preferences: Preferences, permissionGranted: Boolean): String =
+            if (!permissionGranted || isSetupNeeded(preferences)) {
+                Screen.SetupScreen()
+            } else {
+                preferences[LAST_SCREEN].takeIf {
+                    it == Screen.TimelineScreen() ||
+                        it == Screen.AlbumsScreen() ||
+                        it == Screen.LibraryScreen()
+                } ?: Screen.TimelineScreen()
+            }
+
+        fun secureMode(preferences: Preferences): Boolean = preferences[SECURE_MODE] ?: false
 
         const val FAV_ICON_DISABLED = "disabled"
         const val FAV_ICON_BOTTOM_END = "bottom_end"

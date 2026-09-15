@@ -3,14 +3,12 @@ package com.dot.gallery.core.presentation.vm
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dot.gallery.core.MediaDistributor
-import com.dot.gallery.feature_node.domain.model.AlbumState
 import com.dot.gallery.feature_node.domain.model.MediaMetadataState
 import com.dot.gallery.feature_node.domain.model.MediaState
 import com.dot.gallery.feature_node.domain.model.VaultState
 import com.dot.gallery.core.metrics.StartupTracer
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.SharingStarted.Companion.Eagerly
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -21,7 +19,7 @@ class NavigationViewModel @Inject constructor(
 ): ViewModel() {
 
     val albumsState = distributor.albumsFlow.stateIn(
-        viewModelScope, Eagerly, AlbumState()
+        viewModelScope, SharingStarted.WhileSubscribed(5_000), distributor.albumsFlow.value
     )
 
     val trashedMediaState = distributor.trashMediaFlow.stateIn(
@@ -33,7 +31,8 @@ class NavigationViewModel @Inject constructor(
     )
 
     val timelineMediaState = distributor.timelineMediaFlow.stateIn(
-        viewModelScope, Eagerly, MediaState()
+        viewModelScope, SharingStarted.WhileSubscribed(5_000),
+        distributor.timelineMediaFlow.replayCache.lastOrNull() ?: MediaState()
     )
 
     val metadataState = distributor.metadataFlow.stateIn(

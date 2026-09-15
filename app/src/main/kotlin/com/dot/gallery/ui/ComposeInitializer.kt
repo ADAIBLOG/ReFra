@@ -15,6 +15,7 @@ import androidx.startup.Initializer
 import androidx.work.WorkManagerInitializer
 import com.dot.gallery.core.presentation.components.AppBarContainer
 import com.dot.gallery.core.presentation.components.NavigationComp
+import com.dot.gallery.feature_node.presentation.util.Screen
 import com.dot.gallery.ui.theme.GalleryTheme
 
 @SuppressLint("EnsureInitializerMetadata")
@@ -41,7 +42,8 @@ class ComposeInitializer : Initializer<Unit> {
                                 bottomBarState = bottomBarState,
                                 systemBarFollowThemeState = systemBarFollowThemeState,
                                 toggleRotate = { },
-                                isScrolling = isScrolling
+                                isScrolling = isScrolling,
+                                initialStartDestination = Screen.TimelineScreen()
                             )
                         }
                     }

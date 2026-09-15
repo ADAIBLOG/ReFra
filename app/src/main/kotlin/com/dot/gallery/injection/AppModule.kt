@@ -29,6 +29,8 @@ import com.dot.gallery.core.MediaHandlerImpl
 import com.dot.gallery.core.MediaSelector
 import com.dot.gallery.core.MediaSelectorImpl
 import com.dot.gallery.core.smart.SmartScanScheduler
+import com.dot.gallery.core.startup.StartupMediaCache
+import com.dot.gallery.core.startup.StartupWorkGate
 import com.dot.gallery.feature_node.data.data_source.InternalDatabase
 import com.dot.gallery.feature_node.data.data_source.KeychainHolder
 import com.dot.gallery.feature_node.data.data_source.migration.MIGRATION_12_13
@@ -72,9 +74,12 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideDatabase(app: Application): InternalDatabase = StartupTracer.trace("AppModule.provideDatabase") {
+    fun provideDatabase(
+        app: Application,
+        startupGate: StartupWorkGate
+    ): InternalDatabase = StartupTracer.trace("AppModule.provideDatabase") {
         try {
-            EncryptedDatabaseFactory.create(app).also {
+            EncryptedDatabaseFactory.create(app, startupGate).also {
                 EncryptionStateMonitor.reportDatabase(EncryptionBackendState.ENCRYPTED)
             }
         } catch (_: Exception) {
@@ -126,7 +131,8 @@ object AppModule {
         repository: MediaRepository,
         cloudRepository: CloudRepository,
         eventHandler: EventHandler,
-        database: InternalDatabase
+        database: InternalDatabase,
+        startupGate: StartupWorkGate
     ): MediaDistributor = StartupTracer.trace("AppModule.provideMediaDistributor") {
         MediaDistributorImpl(
             context,
@@ -135,7 +141,8 @@ object AppModule {
             eventHandler,
             workManager,
             database.getScannedMediaDao(),
-            database.getSmartScanDao()
+            database.getSmartScanDao(),
+            startupGate
         )
     }
 
@@ -182,6 +189,8 @@ object AppModule {
         isolatedParser: IsolatedMetadataParser,
         metadataSanitizer: MetadataSanitizer,
         smartScanScheduler: SmartScanScheduler,
+        startupCache: StartupMediaCache,
+        startupGate: StartupWorkGate,
     ): MediaRepository = StartupTracer.trace("AppModule.provideMediaRepository") {
         MediaRepositoryImpl(
             context,
@@ -191,7 +200,9 @@ object AppModule {
             geocoder,
             isolatedParser,
             metadataSanitizer,
-            smartScanScheduler
+            smartScanScheduler,
+            startupCache,
+            startupGate
         )
     }
 

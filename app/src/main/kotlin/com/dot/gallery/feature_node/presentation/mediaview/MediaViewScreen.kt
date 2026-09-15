@@ -509,6 +509,15 @@ internal fun resolveMediaViewerInitialSelection(
     }
 }
 
+internal fun isMediaViewerContentReady(
+    selectionApplied: Boolean,
+    isLoading: Boolean,
+    targetFound: Boolean,
+    currentPage: Int,
+    initialPage: Int,
+): Boolean = selectionApplied ||
+    (!isLoading && targetFound && currentPage == initialPage)
+
 @Composable
 fun <T> rememberedDerivedState(
     key: Any? = Unit,
@@ -722,6 +731,13 @@ fun <T : Media> MediaViewScreen(
         initialPage = initialPage,
         initialPageOffsetFraction = 0f,
         pageCount = { pagerItems.size }
+    )
+    val viewerContentReady = isMediaViewerContentReady(
+        selectionApplied = initialPageSetup,
+        isLoading = mediaState.value.isLoading,
+        targetFound = initialSelection.found,
+        currentPage = pagerState.currentPage,
+        initialPage = initialPage,
     )
 
     // Group members for the current page's media
@@ -1470,7 +1486,7 @@ fun <T : Media> MediaViewScreen(
                                 scaleY = kenBurnsScale.value
                             }
                         },
-                    visible = media != null && initialPageSetup,
+                    visible = media != null && viewerContentReady,
                     enter = enterAnimation,
                     exit = exitAnimation
                 ) {

@@ -76,6 +76,8 @@ import com.dot.gallery.core.presentation.components.FilterButton
 import com.dot.gallery.core.presentation.components.FilterKind
 import com.dot.gallery.core.presentation.components.FilterOption
 import com.dot.gallery.core.presentation.components.LoadingAlbum
+import com.dot.gallery.core.startup.LocalStartupWorkGate
+import com.dot.gallery.core.startup.StartupContentEffect
 import com.dot.gallery.feature_node.domain.model.Album
 import com.dot.gallery.feature_node.domain.model.AlbumGroupWithAlbums
 import com.dot.gallery.feature_node.domain.model.AlbumSectionWithAlbums
@@ -106,6 +108,8 @@ import com.dot.gallery.feature_node.presentation.util.rememberBottomBarInset
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 
 internal fun albumScreenHorizontalInsets(
     paddingValues: PaddingValues,
@@ -155,11 +159,23 @@ fun AlbumsScreen(
             it.displayMode == com.dot.gallery.feature_node.domain.model.MergedSubfolderAlbum.DISPLAY_MODE_SUB_GALLERY
         }.mapTo(HashSet()) { it.id }
     }
-    val mediaState = distributor.timelineMediaFlow.collectAsStateWithLifecycle(
+    val startupGate = LocalStartupWorkGate.current
+    val timelineForTypeCards = remember(startupGate, distributor) {
+        if (startupGate == null) distributor.timelineMediaFlow
+        else flow {
+            startupGate.awaitFirstContent()
+            emitAll(distributor.timelineMediaFlow)
+        }
+    }
+    val mediaState = timelineForTypeCards.collectAsStateWithLifecycle(
         context = Dispatchers.IO,
         initialValue = MediaState()
     )
     val albumsState = distributor.albumsFlow.collectAsStateWithLifecycle()
+    StartupContentEffect(
+        route = Screen.AlbumsScreen(),
+        ready = !albumsState.value.isLoading
+    )
 
     // Cloud albums grouped by provider (e.g. SMB, IMMICH) for their dedicated section.
     val cloudProviderGroups = remember(albumsState.value.albumsCloud) {

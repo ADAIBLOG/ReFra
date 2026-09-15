@@ -16,6 +16,7 @@ import com.dot.gallery.core.ml.ModelGroup
 import com.dot.gallery.core.ml.ModelManager
 import com.dot.gallery.core.ml.ModelStatus
 import com.dot.gallery.core.smart.SmartScanScheduler
+import com.dot.gallery.core.startup.StartupWorkGate
 import com.dot.gallery.core.util.SdkCompat
 import com.dot.gallery.feature_node.data.data_source.CategoryWithMediaCount
 import com.dot.gallery.feature_node.data.data_source.SmartScanFeature
@@ -27,12 +28,15 @@ import com.dot.gallery.feature_node.domain.util.MediaOrder
 import com.dot.gallery.feature_node.presentation.location.MapGeoMediaSource
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -46,6 +50,10 @@ data class CategoryMedia(
     val category: CategoryWithMediaCount,
     val thumbnailMedia: Media.UriMedia?
 )
+
+internal fun categoriesLoaded(items: List<CategoryMedia>?): Boolean = items != null
+
+internal fun noCategories(items: List<CategoryMedia>?): Boolean = items?.isEmpty() == true
 
 data class CloudLibraryState(
     val hasCloud: Boolean = false,
@@ -97,10 +105,17 @@ class LibraryViewModel @Inject constructor(
     private val providerRegistry: ProviderRegistry,
     private val cloudMediaDao: CloudMediaDao,
     private val cloudServerConfigDao: CloudServerConfigDao,
+    private val startupGate: StartupWorkGate,
+    private val libraryCategorySource: LibraryCategorySource,
     mapGeoMediaSource: MapGeoMediaSource,
 ) : ViewModel() {
 
     val areAiFeaturesAvailable: Boolean get() = modelManager.areAiFeaturesAvailable
+
+    private fun <T> Flow<T>.afterFirstContent(): Flow<T> = flow {
+        startupGate.awaitFirstContent()
+        emitAll(this@afterFirstContent)
+    }
 
     val modelStatus: StateFlow<ModelStatus> = modelManager.status(ModelGroup.SEARCH)
 
@@ -136,6 +151,7 @@ class LibraryViewModel @Inject constructor(
         // Always-on people collector: combines local (on-device) and cloud people providers, so
         // on-device Person grouping surfaces in the Library even when no cloud account exists.
         viewModelScope.launch {
+            startupGate.awaitFirstContent()
             cloudRepository.getAllPeople().collect { resource ->
                 if (resource is Resource.Success) {
                     val people = resource.data ?: emptyList()
@@ -192,6 +208,7 @@ class LibraryViewModel @Inject constructor(
         if (availability.isConnected && ProviderCapability.PEOPLE in allCaps) {
             peopleJob?.cancel()
             peopleJob = viewModelScope.launch {
+                startupGate.awaitFirstContent()
                 cloudRepository.getAllPeople().collect { resource ->
                     if (resource is Resource.Success) {
                         _cloudState.value = _cloudState.value.copy(
@@ -207,6 +224,7 @@ class LibraryViewModel @Inject constructor(
         ) {
             sharedLinksJob?.cancel()
             sharedLinksJob = viewModelScope.launch {
+                startupGate.awaitFirstContent()
                 val accounts = cloudServerConfigDao.getActive().first().filter { config ->
                     val provider = providerRegistry.getByConfigId(config.id)
                     provider?.isAvailable == true &&
@@ -231,13 +249,13 @@ class LibraryViewModel @Inject constructor(
     val geoMedia = mapGeoMediaSource.mergedGeoMedia(
         localGeoMedia = mediaDistributor.geoMediaFlow,
         timelineMedia = mediaDistributor.timelineMediaFlow,
-    ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    ).afterFirstContent().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val locations = mapGeoMediaSource.mergedLocations(
         localLocations = mediaDistributor.locationsMediaFlow,
         geoMedia = geoMedia,
         timelineMedia = mediaDistributor.timelineMediaFlow,
-    ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    ).afterFirstContent().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val indicatorState = combine(
         if (SdkCompat.supportsTrash) mediaDistributor.trashMediaFlow else flowOf(MediaState()),
@@ -250,21 +268,8 @@ class LibraryViewModel @Inject constructor(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), LibraryIndicatorState())
 
     // New category system - top categories for library display with thumbnails
-    private val topCategoriesRaw = repository.getTopCategories(5)
-    
-    val topCategories = combine(
-        topCategoriesRaw,
-        mediaDistributor.timelineMediaFlow
-    ) { categories, mediaState ->
-        val mediaMap = mediaState.media.associateBy { it.id }
-        categories.map { category ->
-            CategoryMedia(
-                category = category,
-                thumbnailMedia = category.thumbnailMediaId?.let { mediaMap[it] }
-            )
-        }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), emptyList())
-    
+    val topCategories: StateFlow<List<CategoryMedia>?> = libraryCategorySource.categories
+
     // Total count of categories with media (for the "See all" indicator)
     val totalCategoryCount = repository.getCategoryCount()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 0)

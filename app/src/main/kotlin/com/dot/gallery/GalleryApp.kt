@@ -40,6 +40,7 @@ import com.dot.gallery.core.decoder.supportJp2Decoder
 import com.dot.gallery.core.decoder.supportTiffDecoder
 import com.dot.gallery.core.decoder.supportRawDecoder
 import com.dot.gallery.core.smart.SmartScanScheduler
+import com.dot.gallery.core.startup.StartupWorkGate
 import com.dot.gallery.core.workers.TempVaultCleanupWorker
 import com.dot.gallery.core.workers.enqueueMetadataLocationRepair
 import com.dot.gallery.feature_node.data.data_source.SmartScanFeature
@@ -183,6 +184,9 @@ class GalleryApp : Application(), SingletonSketch.Factory, Configuration.Provide
     @Inject
     lateinit var offlineModeManager: OfflineModeManager
 
+    @Inject
+    lateinit var startupGate: StartupWorkGate
+
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
@@ -194,9 +198,9 @@ class GalleryApp : Application(), SingletonSketch.Factory, Configuration.Provide
         StartupTracer.trace("App.super.onCreate (Hilt DI)") {
             super.onCreate()
         }
-        workManager.enqueueMetadataLocationRepair()
-
         appScope.launch {
+            startupGate.awaitFirstContent()
+            workManager.enqueueMetadataLocationRepair()
             metadataSanitizer.recoverPendingTransactions()
             FrameSourceCleanup.sweep(this@GalleryApp)
         }
@@ -245,24 +249,26 @@ class GalleryApp : Application(), SingletonSketch.Factory, Configuration.Provide
             SandboxedDecoderHolder.init(isolatedImageDecoder, this)
         }
 
-        StartupTracer.trace("TempVaultCleanupWorker.schedule") {
-            TempVaultCleanupWorker.schedule(workManager)
-        }
-
-        // One-time cleanup of leaked vault temp files for users upgrading from affected versions
-        appScope.launch(Dispatchers.IO) {
+        appScope.launch {
+            startupGate.awaitFirstContent()
+            StartupTracer.trace("TempVaultCleanupWorker.schedule") {
+                TempVaultCleanupWorker.schedule(workManager)
+            }
+            // One-time cleanup of leaked vault temp files for users upgrading from affected versions
             TempVaultCleanupWorker.runLegacyFilesdirCleanup(this@GalleryApp)
         }
 
         // Initialize ML models (copies from assets on withML, checks presence on noML)
         // Auto-configure cloud providers asynchronously (off main thread)
         val cloudInitialization = appScope.async {
+            startupGate.awaitFirstContent()
             runCatching { cloudProviderInitializer.initializeAsync() }
                 .onFailure { if (it is CancellationException) throw it }
             runCatching { cloudSyncScheduler.reconcile() }
                 .onFailure { if (it is CancellationException) throw it }
         }
         appScope.launch {
+            startupGate.awaitFirstContent()
             listOf(
                 "SearchIndexerUpdater",
                 "DatabaseUpdaterWorker",
@@ -307,6 +313,7 @@ class GalleryApp : Application(), SingletonSketch.Factory, Configuration.Provide
                 val routeChanged = network != currentDefaultNetwork
                 currentDefaultNetwork = network
                 appScope.launch {
+                    startupGate.awaitFirstContent()
                     cloudProviderInitializer.retryTransientAuthenticationFailures()
                     if (routeChanged) cloudProviderInitializer.reconfigureNetworkSensitiveProviders()
                     cloudProviderInitializer.reconfigureActiveProviders()
@@ -315,7 +322,10 @@ class GalleryApp : Application(), SingletonSketch.Factory, Configuration.Provide
 
             override fun onLost(network: Network) {
                 if (network == currentDefaultNetwork) currentDefaultNetwork = null
-                appScope.launch { cloudProviderInitializer.reconfigureActiveProviders() }
+                appScope.launch {
+                    startupGate.awaitFirstContent()
+                    cloudProviderInitializer.reconfigureActiveProviders()
+                }
             }
         }
         if (!runNetworkCallbackSetup(

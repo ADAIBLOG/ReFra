@@ -15,6 +15,7 @@ import com.dot.gallery.cloud.core.capabilities.MemoriesCapableProvider
 import com.dot.gallery.core.MediaDistributor
 import com.dot.gallery.core.Resource
 import com.dot.gallery.core.Settings
+import com.dot.gallery.core.startup.StartupWorkGate
 import com.dot.gallery.feature_node.domain.model.Media
 import com.dot.gallery.feature_node.domain.model.MediaMetadata
 import com.dot.gallery.feature_node.domain.model.StoryCard
@@ -24,10 +25,13 @@ import com.dot.gallery.feature_node.domain.repository.MediaRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -39,25 +43,34 @@ class StoryCardsViewModel @Inject constructor(
     private val repository: MediaRepository,
     private val distributor: MediaDistributor,
     private val providerRegistry: ProviderRegistry,
+    private val startupGate: StartupWorkGate,
     @param:ApplicationContext private val context: Context
 ) : ViewModel() {
 
     private val configFlow = Settings.Misc.getStoryCardsConfig(context)
 
+    private fun <T> Flow<T>.afterFirstContent(): Flow<T> = flow {
+        startupGate.awaitFirstContent()
+        emitAll(this@afterFirstContent)
+    }
+
     private val timelineMedia = distributor.timelineMediaFlow
         .map { it.media }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    private val albumsState = distributor.albumsFlow
+    private val albumsState = distributor.albumsFlow.afterFirstContent()
 
     private val favoritesMedia = distributor.favoritesMediaFlow
+        .afterFirstContent()
         .map { it.media }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val metadataFlow = repository.getMetadata()
+        .afterFirstContent()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val topCategories = repository.getTopCategories(5)
+        .afterFirstContent()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val storyCards: StateFlow<List<StoryCard>> = combine(
@@ -107,6 +120,7 @@ class StoryCardsViewModel @Inject constructor(
         val providers = providerRegistry.getByCapability<MemoriesCapableProvider>()
         if (providers.isEmpty()) return
         viewModelScope.launch {
+            startupGate.awaitFirstContent()
             for (provider in providers) {
                 provider.getMemories().collect { resource ->
                     when (resource) {

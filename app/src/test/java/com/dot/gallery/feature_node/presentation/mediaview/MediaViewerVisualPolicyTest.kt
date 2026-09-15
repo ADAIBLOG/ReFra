@@ -235,4 +235,89 @@ class MediaViewerVisualPolicyTest {
             )
         )
     }
+
+    @Test
+    fun deepAlbumTargetResolvesItsExactPagerIndex() {
+        val pagerMediaIds = (1L..1200L).toList()
+
+        assertEquals(
+            MediaViewerInitialSelection(pageIndex = 949, memberId = null, found = true),
+            resolveMediaViewerInitialSelection(
+                mediaId = 950L,
+                pagerMediaIds = pagerMediaIds,
+                mediaGroupIds = emptyMap(),
+            ),
+        )
+    }
+
+    @Test
+    fun groupedMemberBeyondPage250ResolvesToRepresentativeAndExactMember() {
+        val pagerMediaIds = (1L..600L).filter { it != 554L && it != 555L }
+
+        assertEquals(
+            MediaViewerInitialSelection(pageIndex = 399, memberId = 555L, found = true),
+            resolveMediaViewerInitialSelection(
+                mediaId = 555L,
+                pagerMediaIds = pagerMediaIds,
+                mediaGroupIds = mapOf(400L to listOf(400L, 554L, 555L)),
+            ),
+        )
+    }
+
+    @Test
+    fun viewerContentIsReadyWhenLoadedSelectionAlreadyMatchesInitialPage() {
+        assertTrue(
+            isMediaViewerContentReady(
+                selectionApplied = false,
+                isLoading = false,
+                targetFound = true,
+                currentPage = 5,
+                initialPage = 5,
+            )
+        )
+    }
+
+    @Test
+    fun viewerContentIsNotReadyWhileLoadingMissingOrMisaligned() {
+        assertFalse(
+            isMediaViewerContentReady(
+                selectionApplied = false,
+                isLoading = true,
+                targetFound = true,
+                currentPage = 5,
+                initialPage = 5,
+            )
+        )
+        assertFalse(
+            isMediaViewerContentReady(
+                selectionApplied = false,
+                isLoading = false,
+                targetFound = false,
+                currentPage = 5,
+                initialPage = 5,
+            )
+        )
+        assertFalse(
+            isMediaViewerContentReady(
+                selectionApplied = false,
+                isLoading = false,
+                targetFound = true,
+                currentPage = 3,
+                initialPage = 5,
+            )
+        )
+    }
+
+    @Test
+    fun viewerContentStaysReadyAfterAppliedSelectionEvenWhenUserSwiped() {
+        assertTrue(
+            isMediaViewerContentReady(
+                selectionApplied = true,
+                isLoading = false,
+                targetFound = true,
+                currentPage = 7,
+                initialPage = 5,
+            )
+        )
+    }
 }
