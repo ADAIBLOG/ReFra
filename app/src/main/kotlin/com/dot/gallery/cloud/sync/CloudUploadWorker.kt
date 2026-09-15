@@ -14,6 +14,7 @@ import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.os.BatteryManager
 import android.os.Build
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -318,6 +319,7 @@ class CloudUploadWorker @AssistedInject constructor(
             }
 
             val progressMutex = Mutex()
+            val progressThrottle = BackupProgressThrottle(SystemClock::elapsedRealtime)
             coroutineScope {
                 tasks.groupBy { it.provider }.values.map { providerTasks ->
                     launch {
@@ -356,27 +358,29 @@ class CloudUploadWorker @AssistedInject constructor(
                                         failedFiles.add(task.media.label)
                                         printDebug("CloudUploadWorker: [${task.accountLabel}] upload failed for ${task.media.label}: ${e.message}")
                                     }
-                                    setProgress(workDataOf(
-                                        KEY_PHASE to PHASE_UPLOADING,
-                                        KEY_TOTAL_ITEMS to totalItems,
-                                        KEY_CHECKED_ITEMS to totalItems,
-                                        KEY_COMPLETED_ITEMS to completedItems,
-                                        KEY_FAILED_ITEMS to failedItems,
-                                        KEY_CURRENT_FILE to task.media.label,
-                                        KEY_CURRENT_ACCOUNT to task.accountLabel,
-                                        KEY_COMPLETED_FILES to completedFiles.takeLast(MAX_TRACKED_FILES).toTypedArray(),
-                                        KEY_FAILED_FILES to failedFiles.takeLast(MAX_TRACKED_FILES).toTypedArray()
-                                    ))
-                                    if (showTotalProgress) {
-                                        runCatching {
-                                            setForeground(
-                                                progressForegroundInfo(
-                                                    completedItems + failedItems,
-                                                    totalItems,
-                                                    task.media.label,
-                                                    showDetailProgress
+                                    if (progressThrottle.shouldPublish(force = completedItems + failedItems >= totalItems)) {
+                                        setProgress(workDataOf(
+                                            KEY_PHASE to PHASE_UPLOADING,
+                                            KEY_TOTAL_ITEMS to totalItems,
+                                            KEY_CHECKED_ITEMS to totalItems,
+                                            KEY_COMPLETED_ITEMS to completedItems,
+                                            KEY_FAILED_ITEMS to failedItems,
+                                            KEY_CURRENT_FILE to task.media.label,
+                                            KEY_CURRENT_ACCOUNT to task.accountLabel,
+                                            KEY_COMPLETED_FILES to completedFiles.takeLast(MAX_TRACKED_FILES).toTypedArray(),
+                                            KEY_FAILED_FILES to failedFiles.takeLast(MAX_TRACKED_FILES).toTypedArray()
+                                        ))
+                                        if (showTotalProgress) {
+                                            runCatching {
+                                                setForeground(
+                                                    progressForegroundInfo(
+                                                        completedItems + failedItems,
+                                                        totalItems,
+                                                        task.media.label,
+                                                        showDetailProgress
+                                                    )
                                                 )
-                                            )
+                                            }
                                         }
                                     }
                                 }
@@ -812,6 +816,21 @@ internal fun shouldRetryBackupFailure(runAttemptCount: Int): Boolean =
 internal fun isActiveBackupWork(state: WorkInfo.State, tags: Set<String>): Boolean =
     state == WorkInfo.State.RUNNING ||
         state == WorkInfo.State.ENQUEUED && CloudUploadWorker.TAG_MANUAL_BACKUP in tags
+
+internal class BackupProgressThrottle(
+    private val nowMs: () -> Long,
+    private val intervalMs: Long = 500L
+) {
+    private var lastPublishedAt: Long? = null
+
+    fun shouldPublish(force: Boolean = false): Boolean {
+        val now = nowMs()
+        val previous = lastPublishedAt
+        if (!force && previous != null && now - previous < intervalMs) return false
+        lastPublishedAt = now
+        return true
+    }
+}
 
 internal fun backupDestinationConfigIds(
     albumId: Long,

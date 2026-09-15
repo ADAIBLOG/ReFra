@@ -8,6 +8,7 @@ package com.dot.gallery.cloud
 import androidx.work.WorkInfo
 import com.dot.gallery.cloud.data.dao.shouldInvalidateBackupRevision
 import com.dot.gallery.cloud.sync.BACKUP_VERIFICATION_MAX_AGE_MS
+import com.dot.gallery.cloud.sync.BackupProgressThrottle
 import com.dot.gallery.cloud.sync.CloudUploadWorker
 import com.dot.gallery.cloud.sync.backupChecksumVariants
 import com.dot.gallery.cloud.sync.backupDestinationConfigIds
@@ -418,5 +419,31 @@ class CloudUploadWorkerPoolTest {
 
         assertEquals(listOf(0, 2, 4, 6, 8, 10), mapped)
         assertEquals(3, peak.get())
+    }
+
+    @Test
+    fun backupProgressIsThrottledAcrossRapidCompletions() {
+        var now = 0L
+        val throttle = BackupProgressThrottle({ now })
+        assertTrue(throttle.shouldPublish())
+        assertFalse(throttle.shouldPublish())
+        now = 499L
+        assertFalse(throttle.shouldPublish())
+        now = 500L
+        assertTrue(throttle.shouldPublish())
+        now = 999L
+        assertFalse(throttle.shouldPublish())
+        now = 1000L
+        assertTrue(throttle.shouldPublish())
+    }
+
+    @Test
+    fun finalBackupProgressBypassesThrottle() {
+        var now = 0L
+        val throttle = BackupProgressThrottle({ now })
+        assertTrue(throttle.shouldPublish())
+        now = 1L
+        assertTrue(throttle.shouldPublish(force = true))
+        assertFalse(throttle.shouldPublish())
     }
 }

@@ -16,6 +16,7 @@ import com.dot.gallery.feature_node.data.data_source.InternalDatabase
 import com.dot.gallery.feature_node.domain.util.isVideo
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -262,5 +263,65 @@ class CloudMediaDaoTest {
         val uriMedia = dao.getAllForTimeline().first().single().toUriMedia()
         assertEquals("", uriMedia.duration)
         assertTrue(uriMedia.isVideo)
+    }
+
+    private fun installHashUpdateProbe() {
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TABLE backup_hash_updates (remoteId TEXT NOT NULL)"
+        )
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER track_backup_hash_updates AFTER UPDATE OF contentHash ON cloud_media BEGIN INSERT INTO backup_hash_updates(remoteId) VALUES (NEW.remoteId); END"
+        )
+    }
+
+    private fun hashUpdateCount(): Int =
+        db.openHelper.readableDatabase
+            .query("SELECT COUNT(*) FROM backup_hash_updates")
+            .use { it.moveToFirst(); it.getInt(0) }
+
+    @Test
+    fun unchangedContentHashSkipsTheSqlUpdate() = runTest {
+        dao.insert(
+            media("asset", ProviderType.WEBDAV, 1L).copy(
+                contentHash = "same",
+                favorite = true,
+                localCopyPath = "/data/local/asset.jpg"
+            )
+        )
+        installHashUpdateProbe()
+
+        assertEquals(1, dao.updateContentHash("asset", ProviderType.WEBDAV, 1L, "same"))
+        assertEquals(0, hashUpdateCount())
+        val stored = dao.getByRemoteId("asset", ProviderType.WEBDAV, 1L)!!
+        assertEquals("same", stored.contentHash)
+        assertTrue(stored.favorite)
+        assertEquals("/data/local/asset.jpg", stored.localCopyPath)
+
+        assertEquals(0, dao.updateContentHash("missing", ProviderType.WEBDAV, 1L, "same"))
+        assertEquals(0, hashUpdateCount())
+    }
+
+    @Test
+    fun changedContentHashWritesOnceAndStaysAccountScoped() = runTest {
+        dao.insert(media("asset", ProviderType.WEBDAV, 1L))
+        dao.insert(
+            media("asset", ProviderType.WEBDAV, 2L).copy(
+                contentHash = "other-account",
+                favorite = true,
+                localCopyPath = "/data/local/other.jpg"
+            )
+        )
+        installHashUpdateProbe()
+
+        assertEquals(1, dao.updateContentHash("asset", ProviderType.WEBDAV, 1L, "first"))
+        assertEquals(1, dao.updateContentHash("asset", ProviderType.WEBDAV, 1L, "changed"))
+        assertEquals(2, hashUpdateCount())
+        assertEquals(1, dao.updateContentHash("asset", ProviderType.WEBDAV, 1L, "changed"))
+        assertEquals(2, hashUpdateCount())
+
+        val second = dao.getByRemoteId("asset", ProviderType.WEBDAV, 2L)!!
+        assertEquals("other-account", second.contentHash)
+        assertTrue(second.favorite)
+        assertEquals("/data/local/other.jpg", second.localCopyPath)
     }
 }

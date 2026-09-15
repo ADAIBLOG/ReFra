@@ -181,12 +181,35 @@ interface CloudMediaDao {
         WHERE remoteId = :remoteId AND providerType = :providerType AND serverConfigId = :serverConfigId
         """
     )
-    suspend fun updateContentHash(
+    suspend fun updateContentHashValue(
         remoteId: String,
         providerType: ProviderType,
         serverConfigId: Long,
         contentHash: String
     ): Int
+
+    @Query("""
+        SELECT EXISTS(
+            SELECT 1 FROM cloud_media
+            WHERE remoteId = :remoteId AND providerType = :providerType
+                AND serverConfigId = :serverConfigId AND contentHash = :contentHash
+        )
+    """)
+    suspend fun hasContentHash(
+        remoteId: String,
+        providerType: ProviderType,
+        serverConfigId: Long,
+        contentHash: String
+    ): Boolean
+
+    @Transaction
+    suspend fun updateContentHash(
+        remoteId: String,
+        providerType: ProviderType,
+        serverConfigId: Long,
+        contentHash: String
+    ): Int = if (hasContentHash(remoteId, providerType, serverConfigId, contentHash)) 1
+        else updateContentHashValue(remoteId, providerType, serverConfigId, contentHash)
 
     @Query(
         """
