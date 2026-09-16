@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,10 +27,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -55,7 +61,9 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
@@ -70,13 +78,24 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.LifecycleStartEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
 import com.bumptech.glide.integration.compose.GlideImage
@@ -90,6 +109,7 @@ import com.dot.gallery.core.Settings
 import com.dot.gallery.core.Settings.Album.rememberAlbumGridSize
 import com.dot.gallery.core.Settings.Misc.rememberAllowBlur
 import com.dot.gallery.core.Settings.Misc.rememberNoClassification
+import com.dot.gallery.core.metrics.StartupTracer
 import com.dot.gallery.core.ml.ModelStatus
 import com.dot.gallery.core.navigate
 import com.dot.gallery.core.startup.StartupContentEffect
@@ -103,7 +123,6 @@ import com.dot.gallery.feature_node.presentation.library.components.mergeShortcu
 import com.dot.gallery.feature_node.presentation.library.components.rememberLibraryRuntimeShortcuts
 import com.dot.gallery.feature_node.presentation.library.components.MapPreviewCard
 import com.dot.gallery.feature_node.presentation.library.components.dashedBorder
-import com.dot.gallery.feature_node.presentation.mediaview.rememberedDerivedState
 import com.dot.gallery.feature_node.presentation.search.MainSearchBar
 import com.dot.gallery.feature_node.presentation.util.GlideInvalidation
 import com.dot.gallery.feature_node.presentation.util.LocalHazeState
@@ -119,13 +138,13 @@ import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
 import dev.chrisbanes.haze.materials.HazeMaterials
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import com.dot.gallery.ui.core.Icons as GalleryIcons
 
-@OptIn(
-    ExperimentalSharedTransitionApi::class, ExperimentalHazeMaterialsApi::class,
-    ExperimentalGlideComposeApi::class
-)
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun LibraryScreen(
     paddingValues: PaddingValues,
@@ -133,13 +152,136 @@ fun LibraryScreen(
     sharedTransitionScope: SharedTransitionScope,
     animatedContentScope: AnimatedContentScope,
 ) {
-    val eventHandler = LocalEventHandler.current
     val viewModel = hiltViewModel<LibraryViewModel>()
+    val snapshot by viewModel.state.collectAsStateWithLifecycle()
+    val modelStatus by viewModel.modelStatus.collectAsStateWithLifecycle()
+
+    LifecycleStartEffect(Unit) {
+        viewModel.onVisible()
+        onStopOrDispose { viewModel.onHidden() }
+    }
+
+    LibraryScreenContent(
+        snapshot = snapshot,
+        modelStatus = modelStatus,
+        aiAvailable = viewModel.areAiFeaturesAvailable,
+        paddingValues = paddingValues,
+        isScrolling = isScrolling,
+        sharedTransitionScope = sharedTransitionScope,
+        animatedContentScope = animatedContentScope,
+        onContentDrawn = viewModel::onContentDrawn,
+        onViewportChanged = viewModel::updateViewport
+    )
+}
+
+@OptIn(
+    ExperimentalSharedTransitionApi::class, ExperimentalHazeMaterialsApi::class,
+    ExperimentalGlideComposeApi::class
+)
+@Composable
+internal fun LibraryScreenContent(
+    snapshot: LibrarySnapshot,
+    modelStatus: ModelStatus,
+    aiAvailable: Boolean,
+    paddingValues: PaddingValues,
+    isScrolling: MutableState<Boolean>,
+    sharedTransitionScope: SharedTransitionScope,
+    animatedContentScope: AnimatedContentScope,
+    onContentDrawn: () -> Unit,
+    onViewportChanged: (LibraryViewport) -> Unit,
+) {
+    val eventHandler = LocalEventHandler.current
     var lastCellIndex by rememberAlbumGridSize()
+
+    val locations = snapshot.locations.orEmpty()
+    val indicatorState = snapshot.indicators
+
+    // New category system
+    val categoryItems = snapshot.categories
+    val topCategories = categoryItems.orEmpty()
+    val totalCategoryCount = snapshot.categoryCount
+    val noCategoriesFound = noCategories(categoryItems)
+    val latestGeo = snapshot.latestGeo
+
+    // Cloud state
+    val cloudState = snapshot.cloud
+
+    var noClassification by rememberNoClassification()
+    val mapsEnabled = remember { BuildConfig.MAPS_ENABLED }
+    val isDark = isDarkTheme()
+
+    val configuration = LocalConfiguration.current
+    val layoutDirection = LocalLayoutDirection.current
+    val densityState = LocalDensity.current
+    val density = densityState.density
+    val configurationSignature =
+        "${configuration.screenWidthDp}/${configuration.screenHeightDp}/" +
+            "$density/${configuration.fontScale}/$layoutDirection/$lastCellIndex"
+    val sameConfiguration = snapshot.viewport.configuration == configurationSignature
+    val rootInsets = ViewCompat.getRootWindowInsets(LocalView.current)
+    val statusBarTop = initialLibraryInset(
+        WindowInsets.statusBars.getTop(densityState),
+        snapshot.viewport.statusBarTop,
+        sameConfiguration,
+        rootInsets?.isVisible(WindowInsetsCompat.Type.statusBars())
+    )
+    val measuredBottomInset = rememberBottomBarInset(paddingValues)
+    val navigationBarBottom = initialLibraryInset(
+        with(densityState) { measuredBottomInset.roundToPx() },
+        snapshot.viewport.navigationBarBottom,
+        sameConfiguration,
+        rootInsets?.isVisible(WindowInsetsCompat.Type.navigationBars())
+    )
+    val bottomBarInset = with(densityState) { navigationBarBottom.toDp() }
+
+    val gridState = rememberLazyGridState(
+        initialFirstVisibleItemIndex = restoredLibraryIndex(
+            libraryGridSectionKeys(
+                hasLocations = locations.isNotEmpty(),
+                hasPeople = cloudState.hasPeople && cloudState.people.isNotEmpty(),
+                hasCategories = aiAvailable && !noClassification && topCategories.isNotEmpty(),
+                hasNoCategories = aiAvailable && !noClassification &&
+                    noCategoriesFound && modelStatus == ModelStatus.READY,
+            ),
+            snapshot.viewport.grid
+        ),
+        initialFirstVisibleItemScrollOffset =
+            if (sameConfiguration) snapshot.viewport.grid.offset else 0
+    )
+    LaunchedEffect(gridState) {
+        val position = snapshotFlow { gridState.measuredScrollPosition() }
+            .filterNotNull().first()
+        StartupTracer.trace("Library.firstLayout(index=${position.index},offset=${position.offset})") {}
+    }
+    val locationsListState = rememberLazyListState(
+        initialFirstVisibleItemIndex = restoredLibraryIndex(
+            locations.map { it.media.id.toString() },
+            snapshot.viewport.locations
+        ),
+        initialFirstVisibleItemScrollOffset =
+            if (sameConfiguration) snapshot.viewport.locations.offset else 0
+    )
+    val peopleListState = rememberLazyListState(
+        initialFirstVisibleItemIndex = restoredLibraryIndex(
+            cloudState.people.map { it.accountKey },
+            snapshot.viewport.people
+        ),
+        initialFirstVisibleItemScrollOffset =
+            if (sameConfiguration) snapshot.viewport.people.offset else 0
+    )
+    val categoriesListState = rememberLazyListState(
+        initialFirstVisibleItemIndex = restoredLibraryIndex(
+            topCategories.map { "category_${it.id}" },
+            snapshot.viewport.categories
+        ),
+        initialFirstVisibleItemScrollOffset =
+            if (sameConfiguration) snapshot.viewport.categories.offset else 0
+    )
 
     val pinchState = rememberGridPinchZoomState(
         cellsList = albumCellsList,
-        initialCellsIndex = lastCellIndex
+        initialCellsIndex = lastCellIndex,
+        gridState = gridState
     )
 
     LaunchedEffect(pinchState.isZooming) {
@@ -153,33 +295,69 @@ fun LibraryScreen(
         pinchState.gridState.animateOrJumpToTop()
     }
 
-    val locations by viewModel.locations.collectAsStateWithLifecycle()
-    val geoMedia by viewModel.geoMedia.collectAsStateWithLifecycle()
-
-    val indicatorState by viewModel.indicatorState.collectAsStateWithLifecycle()
-
-    // New category system
-    val categoryItems by viewModel.topCategories.collectAsStateWithLifecycle()
-    val topCategories = categoryItems.orEmpty()
-    val totalCategoryCount by viewModel.totalCategoryCount.collectAsStateWithLifecycle()
-    val noCategoriesFound = noCategories(categoryItems)
     StartupContentEffect(
         route = Screen.LibraryScreen(),
-        ready = categoriesLoaded(categoryItems)
+        ready = true,
+        onContentDrawn = onContentDrawn
     )
 
+    val currentOnViewportChanged by rememberUpdatedState(onViewportChanged)
+    val currentGeometry by rememberUpdatedState(
+        LibraryViewport(
+            configuration = configurationSignature,
+            statusBarTop = statusBarTop,
+            navigationBarBottom = navigationBarBottom
+        )
+    )
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle, gridState) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            snapshotFlow {
+                gridState.measuredScrollPosition()?.let { currentGeometry.copy(grid = it) }
+            }.filterNotNull().distinctUntilChanged().collect { currentOnViewportChanged(it) }
+        }
+    }
+    LaunchedEffect(lifecycle, locationsListState) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            snapshotFlow {
+                locationsListState.measuredScrollPosition()?.let { currentGeometry.copy(locations = it) }
+            }.filterNotNull().distinctUntilChanged().collect { currentOnViewportChanged(it) }
+        }
+    }
+    LaunchedEffect(lifecycle, peopleListState) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            snapshotFlow {
+                peopleListState.measuredScrollPosition()?.let { currentGeometry.copy(people = it) }
+            }.filterNotNull().distinctUntilChanged().collect { currentOnViewportChanged(it) }
+        }
+    }
+    LaunchedEffect(lifecycle, categoriesListState) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            snapshotFlow {
+                categoriesListState.measuredScrollPosition()?.let { currentGeometry.copy(categories = it) }
+            }.filterNotNull().distinctUntilChanged().collect { currentOnViewportChanged(it) }
+        }
+    }
+
+    LifecycleResumeEffect(Unit) {
+        onPauseOrDispose {
+            currentOnViewportChanged(
+                currentGeometry.copy(
+                    grid = gridState.measuredScrollPosition() ?: LibraryScrollPosition(),
+                    locations = locationsListState.measuredScrollPosition()
+                        ?: LibraryScrollPosition(),
+                    people = peopleListState.measuredScrollPosition()
+                        ?: LibraryScrollPosition(),
+                    categories = categoriesListState.measuredScrollPosition()
+                        ?: LibraryScrollPosition()
+                )
+            )
+        }
+    }
+
     // Locations
-    val noLocationsFound by rememberedDerivedState { locations.isEmpty() }
-    val totalLocationsCount by rememberedDerivedState { locations.size }
-    val mapsEnabled = remember { BuildConfig.MAPS_ENABLED }
-    val isDark = isDarkTheme()
-
-    val modelStatus by viewModel.modelStatus.collectAsStateWithLifecycle()
-    val aiAvailable = viewModel.areAiFeaturesAvailable
-    var noClassification by rememberNoClassification()
-
-    // Cloud state
-    val cloudState by viewModel.cloudState.collectAsStateWithLifecycle()
+    val noLocationsFound = locations.isEmpty()
+    val totalLocationsCount = snapshot.locationCount
 
     // In-place shortcut editing (Quick-Settings style)
     var shortcutsEditMode by remember { mutableStateOf(false) }
@@ -195,6 +373,7 @@ fun LibraryScreen(
                 isScrolling = isScrolling,
                 sharedTransitionScope = sharedTransitionScope,
                 animatedContentScope = animatedContentScope,
+                statusBarInsets = WindowInsets(top = statusBarTop),
                 menuItems = {
                     val tertiaryContainer = MaterialTheme.colorScheme.tertiaryFixed
                     val onTertiaryContainer = MaterialTheme.colorScheme.onTertiaryFixed
@@ -249,12 +428,12 @@ fun LibraryScreen(
             LaunchedEffect(gridState.isScrollInProgress) {
                 isScrolling.value = gridState.isScrollInProgress
             }
-            val bottomBarInset = rememberBottomBarInset(paddingValues)
             LazyVerticalGrid(
                 state = gridState,
                 modifier = Modifier
                     .padding(horizontal = 8.dp)
-                    .fillMaxSize(),
+                    .fillMaxSize()
+                    .testTag("library-grid"),
                 columns = gridCells,
                 contentPadding = PaddingValues(
                     top = it.calculateTopPadding(),
@@ -298,7 +477,6 @@ fun LibraryScreen(
                         key = "LocationsHeader"
                     ) {
                         if (mapsEnabled) {
-                            val latest = geoMedia.firstOrNull()
                             MapPreviewCard(
                                 modifier = Modifier
                                     .pinchItem(key = "LocationsHeader")
@@ -309,9 +487,9 @@ fun LibraryScreen(
                                     .clickable {
                                         eventHandler.navigate(Screen.LocationsScreen())
                                     },
-                                latestMedia = latest?.media,
-                                latitude = latest?.latitude,
-                                longitude = latest?.longitude,
+                                latestMedia = latestGeo?.media,
+                                latitude = latestGeo?.latitude,
+                                longitude = latestGeo?.longitude,
                                 effectiveAppIsDark = isDark
                             )
                         } else {
@@ -345,11 +523,13 @@ fun LibraryScreen(
                         key = "LocationsList"
                     ) {
                         LazyRow(
+                            state = locationsListState,
                             modifier = Modifier
                                 .padding(horizontal = 16.dp)
                                 .padding(top = 8.dp)
                                 .clip(RoundedCornerShape(16.dp))
-                                .editLock(shortcutsEditMode),
+                                .editLock(shortcutsEditMode)
+                                .testTag("library-locations"),
                             horizontalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             items(
@@ -371,6 +551,7 @@ fun LibraryScreen(
                                         modifier = Modifier
                                             .width(164.dp)
                                             .height(256.dp)
+                                            .testTag("library-location-${media.id}")
                                             .clip(RoundedCornerShape(24.dp))
                                             .clickable {
                                                 val city = locationMedia.city
@@ -452,7 +633,7 @@ fun LibraryScreen(
                                 contentColor = MaterialTheme.colorScheme.onSurface,
                                 containerColor = MaterialTheme.colorScheme.surface,
                                 useIndicator = true,
-                                indicatorCounter = cloudState.people.size,
+                                indicatorCounter = snapshot.peopleCount,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
@@ -466,10 +647,12 @@ fun LibraryScreen(
                         key = "PeopleList"
                     ) {
                         LazyRow(
+                            state = peopleListState,
                             modifier = Modifier
                                 .padding(horizontal = 16.dp)
                                 .padding(top = 8.dp)
-                                .editLock(shortcutsEditMode),
+                                .editLock(shortcutsEditMode)
+                                .testTag("library-people"),
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             items(
@@ -479,6 +662,7 @@ fun LibraryScreen(
                                 Box(
                                     modifier = Modifier
                                         .size(80.dp)
+                                        .testTag("library-person-${person.accountKey}")
                                         .clip(CircleShape)
                                         .clickable {
                                             eventHandler.navigate(
@@ -518,7 +702,7 @@ fun LibraryScreen(
                 }
 
                 if (aiAvailable && !noClassification) {
-                    if (!noCategoriesFound) {
+                    if (topCategories.isNotEmpty()) {
                         // "See all categories" header below carousel
                         item(
                             span = { GridItemSpan(maxLineSpan) },
@@ -553,17 +737,20 @@ fun LibraryScreen(
                             key = "CategoriesList"
                         ) {
                             LazyRow(
+                                state = categoriesListState,
                                 modifier = Modifier
                                     .padding(horizontal = 16.dp)
                                     .padding(top = 8.dp)
                                     .clip(RoundedCornerShape(16.dp))
-                                    .editLock(shortcutsEditMode),
+                                    .editLock(shortcutsEditMode)
+                                    .testTag("library-categories"),
                                 horizontalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
                                 items(
                                     items = topCategories,
-                                    key = { categoryMedia -> "category_${categoryMedia.category.id}" }
-                                ) { (category, thumbnailMedia) ->
+                                    key = { preview -> "category_${preview.id}" }
+                                ) { preview ->
+                                    val thumbnailMedia = preview.thumbnailMedia
                                     with(sharedTransitionScope) {
                                         val isDarkTheme = isDarkTheme()
                                         val allowBlur by rememberAllowBlur()
@@ -577,8 +764,9 @@ fun LibraryScreen(
                                             modifier = Modifier
                                                 .width(164.dp)
                                                 .height(256.dp)
+                                                .testTag("library-category-${preview.id}")
                                                 .categorySharedElement(
-                                                    categoryId = category.id,
+                                                    categoryId = preview.id,
                                                     animatedVisibilityScope = animatedContentScope
                                                 )
                                                 .clip(RoundedCornerShape(24.dp))
@@ -586,14 +774,14 @@ fun LibraryScreen(
                                                     onClick = {
                                                         eventHandler.navigate(
                                                             Screen.CategoryViewScreen.categoryId(
-                                                                category.id
+                                                                preview.id
                                                             )
                                                         )
                                                     },
                                                     onLongClick = {
                                                         eventHandler.navigate(
                                                             Screen.EditCategoryScreen.categoryId(
-                                                                category.id
+                                                                preview.id
                                                             )
                                                         )
                                                     }
@@ -604,7 +792,7 @@ fun LibraryScreen(
                                                     modifier = Modifier.fillMaxSize(),
                                                     contentScale = ContentScale.Crop,
                                                     model = thumbnailMedia.getUri(),
-                                                    contentDescription = category.name,
+                                                    contentDescription = preview.name,
                                                     requestBuilderTransform = {
                                                         it.signature(
                                                             GlideInvalidation.signature(
@@ -646,7 +834,7 @@ fun LibraryScreen(
                                                 horizontalAlignment = Alignment.CenterHorizontally
                                             ) {
                                                 Text(
-                                                    text = category.name,
+                                                    text = preview.name,
                                                     style = MaterialTheme.typography.titleMedium,
                                                     color = Color.White,
                                                     fontWeight = FontWeight.SemiBold,
@@ -657,7 +845,7 @@ fun LibraryScreen(
                                                 Text(
                                                     text = stringResource(
                                                         R.string.category_media_count,
-                                                        category.mediaCount
+                                                        preview.mediaCount
                                                     ),
                                                     style = MaterialTheme.typography.bodySmall,
                                                     color = Color.White.copy(alpha = 0.7f),
@@ -690,6 +878,50 @@ fun LibraryScreen(
         }
     }
 
+}
+
+internal fun libraryGridSectionKeys(
+    hasLocations: Boolean,
+    hasPeople: Boolean,
+    hasCategories: Boolean,
+    hasNoCategories: Boolean,
+): List<String> = buildList {
+    add("libraryShortcuts")
+    if (hasLocations) {
+        add("LocationsHeader")
+        add("LocationsList")
+    }
+    if (hasPeople) {
+        add("PeopleHeader")
+        add("PeopleList")
+    }
+    if (hasCategories) {
+        add("CategoriesHeader")
+        add("CategoriesList")
+    }
+    if (hasNoCategories) add("NoCategories")
+}
+
+private fun LazyGridState.measuredScrollPosition(): LibraryScrollPosition? {
+    if (layoutInfo.totalItemsCount <= 0 || isScrollInProgress) return null
+    val index = firstVisibleItemIndex
+    return LibraryScrollPosition(
+        key = layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+            ?.key as? String,
+        index = index,
+        offset = firstVisibleItemScrollOffset
+    )
+}
+
+private fun LazyListState.measuredScrollPosition(): LibraryScrollPosition? {
+    if (layoutInfo.totalItemsCount <= 0 || isScrollInProgress) return null
+    val index = firstVisibleItemIndex
+    return LibraryScrollPosition(
+        key = layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+            ?.key?.toString(),
+        index = index,
+        offset = firstVisibleItemScrollOffset
+    )
 }
 
 /**

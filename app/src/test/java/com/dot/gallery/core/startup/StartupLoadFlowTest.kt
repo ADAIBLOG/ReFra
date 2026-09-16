@@ -173,6 +173,35 @@ class StartupLoadFlowTest {
     }
 
     @Test
+    fun `initial cached emission is marked partial`() = runTest(StandardTestDispatcher()) {
+        val h = harness()
+        val (results, job) = collectInto(h)
+        advanceUntilIdle()
+        assertTrue((results[0] as Resource.Success).isPartial)
+        job.cancel()
+    }
+
+    @Test
+    fun `initial bounded emission is marked partial`() = runTest(StandardTestDispatcher()) {
+        val h = harness(cached = null)
+        val (results, job) = collectInto(h)
+        advanceUntilIdle()
+        assertTrue((results[0] as Resource.Success).isPartial)
+        job.cancel()
+    }
+
+    @Test
+    fun `live emissions are complete rather than partial`() =
+        runTest(StandardTestDispatcher()) {
+            val h = harness(liveSource = flow { emit(listOf("live-full")) })
+            val (results, job) = collectInto(h)
+            advanceUntilIdle()
+            assertTrue((results[0] as Resource.Success).isPartial)
+            assertTrue(!(results[1] as Resource.Success).isPartial)
+            job.cancel()
+        }
+
+    @Test
     fun `live failure after cached content preserves the emission`() =
         runTest(StandardTestDispatcher()) {
             val boom = IllegalStateException("mediastore blew up")

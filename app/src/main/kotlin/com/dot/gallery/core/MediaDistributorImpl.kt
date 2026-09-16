@@ -89,6 +89,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
@@ -1195,7 +1196,7 @@ class MediaDistributorImpl @Inject constructor(
                 extendedDateFormat = extendedDateFormat,
                 weeklyDateFormat = weeklyDateFormat,
                 dateSource = dateSource
-            )
+            ).copy(isPartial = (result as? Resource.Success)?.isPartial == true)
             StartupTracer.end(mapSpan)
             StartupTracer.end(combineSpan)
             state
@@ -1325,7 +1326,7 @@ class MediaDistributorImpl @Inject constructor(
 
     private val locationsAndGeoMediaFlow: SharedFlow<Pair<List<LocationMedia>, List<GeoMedia>>> = combine(
         repository.getMetadata(),
-        timelineMediaFlow
+        timelineMediaFlow.filter { !it.isLoading && !it.isPartial && it.error.isEmpty() }
     ) { metadata, timelineState ->
         val mediaById = HashMap<Long, Media.UriMedia>(timelineState.media.size)
         for (m in timelineState.media) { mediaById[m.id] = m }

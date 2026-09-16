@@ -17,8 +17,15 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.dot.gallery.core.encryption.EncryptedPreferencesSerializer
 import com.dot.gallery.core.metrics.StartupTracer
+import com.dot.gallery.core.workers.FaceIndexerWorker
 import com.dot.gallery.feature_node.domain.model.Album
 import com.dot.gallery.feature_node.domain.model.Media
+import com.dot.gallery.feature_node.presentation.library.CachedLibrarySnapshot
+import com.dot.gallery.feature_node.presentation.library.LibrarySnapshot
+import com.dot.gallery.feature_node.presentation.library.MAX_CACHED_LIBRARY_CATEGORIES
+import com.dot.gallery.feature_node.presentation.library.isPersistableThumbnailUrl
+import com.dot.gallery.feature_node.presentation.library.libraryPreviewWindow
+import com.dot.gallery.feature_node.presentation.library.validateLibrarySnapshot
 import com.dot.gallery.feature_node.presentation.util.mediaStoreVersion
 import com.dot.gallery.feature_node.presentation.util.printWarning
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -251,6 +258,70 @@ class StartupMediaCache internal constructor(
         )
     }
 
+    private val faceThumbDir: String = File(context.filesDir, FaceIndexerWorker.THUMB_DIR)
+        .absolutePath
+
+    internal suspend fun readLibrary(privacyFingerprint: String): LibrarySnapshot? =
+        tracedRead("library") {
+            readEntry(
+                payloadKey = LIBRARY_PAYLOAD_KEY,
+                stampKey = LIBRARY_STAMP_KEY,
+                label = "library",
+                decode = { json.decodeFromString(CachedLibrarySnapshot.serializer(), it) },
+                validate = {
+                    it.version == 1 && it.privacyFingerprint == privacyFingerprint &&
+                        validateLibrarySnapshot(it.snapshot, faceThumbDir)
+                }
+            )?.snapshot
+        }
+
+    internal suspend fun writeLibrary(
+        stamp: StartupCacheStamp?,
+        privacyFingerprint: String,
+        snapshot: LibrarySnapshot
+    ) {
+        if (stamp == null) return
+        val bounded = snapshot.copy(
+            categories = snapshot.categories?.take(MAX_CACHED_LIBRARY_CATEGORIES),
+            locations = snapshot.locations?.let { locations ->
+                libraryPreviewWindow(locations, snapshot.viewport.locations) {
+                    it.media.id.toString()
+                }
+            },
+            cloud = snapshot.cloud.copy(
+                isConnected = false,
+                connectedCapabilities = emptySet(),
+                people = libraryPreviewWindow(
+                    snapshot.cloud.people,
+                    snapshot.viewport.people
+                ) { it.accountKey }.map { person ->
+                    person.copy(
+                        thumbnailUrl = person.thumbnailUrl?.takeIf {
+                            isPersistableThumbnailUrl(it, person, faceThumbDir)
+                        }
+                    )
+                }
+            )
+        )
+        if (!validateLibrarySnapshot(bounded, faceThumbDir)) {
+            printWarning("StartupMediaCache: library validation rejected write")
+            return
+        }
+        writeEntry(
+            stamp = stamp,
+            payloadKey = LIBRARY_PAYLOAD_KEY,
+            stampKey = LIBRARY_STAMP_KEY,
+            encodedPayload = json.encodeToString(
+                CachedLibrarySnapshot.serializer(),
+                CachedLibrarySnapshot(
+                    privacyFingerprint = privacyFingerprint,
+                    snapshot = bounded
+                )
+            ),
+            label = "library"
+        )
+    }
+
     private suspend fun <T> readEntry(
         payloadKey: Preferences.Key<String>,
         stampKey: Preferences.Key<String>,
@@ -306,7 +377,11 @@ class StartupMediaCache internal constructor(
         }
         try {
             store.edit { prefs ->
-                if (currentStamp() != stamp) return@edit
+                val now = currentStamp()
+                if (now != stamp) {
+                    printWarning("StartupMediaCache: $label stamp moved $stamp -> $now, skipping write")
+                    return@edit
+                }
                 prefs[payloadKey] = encodedPayload
                 prefs[stampKey] = json.encodeToString(StartupCacheStamp.serializer(), stamp)
             }
@@ -337,5 +412,7 @@ class StartupMediaCache internal constructor(
         val MEDIA_STAMP_KEY = stringPreferencesKey("startup_media_stamp")
         val ALBUMS_PAYLOAD_KEY = stringPreferencesKey("startup_albums")
         val ALBUMS_STAMP_KEY = stringPreferencesKey("startup_albums_stamp")
+        val LIBRARY_PAYLOAD_KEY = stringPreferencesKey("startup_library")
+        val LIBRARY_STAMP_KEY = stringPreferencesKey("startup_library_stamp")
     }
 }

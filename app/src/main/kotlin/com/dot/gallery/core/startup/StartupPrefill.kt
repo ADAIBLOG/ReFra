@@ -2,7 +2,7 @@ package com.dot.gallery.core.startup
 
 import com.dot.gallery.core.MediaDistributor
 import com.dot.gallery.core.metrics.StartupTracer
-import com.dot.gallery.feature_node.presentation.library.LibraryCategorySource
+import com.dot.gallery.feature_node.presentation.library.LibraryContentSource
 import com.dot.gallery.feature_node.presentation.util.Screen
 import com.dot.gallery.feature_node.presentation.util.printWarning
 import kotlinx.coroutines.CancellationException
@@ -38,7 +38,7 @@ internal suspend fun boundedPrefill(
 class StartupPrefill @Inject constructor(
     private val cache: StartupMediaCache,
     private val distributor: MediaDistributor,
-    private val libraryCategorySource: LibraryCategorySource
+    private val libraryContentSource: LibraryContentSource
 ) {
 
     suspend fun prepare(route: String) {
@@ -48,6 +48,11 @@ class StartupPrefill @Inject constructor(
         }
         try {
             withContext(Dispatchers.IO) {
+                if (route == Screen.TimelineScreen() || route == Screen.AlbumsScreen() ||
+                    route == Screen.LibraryScreen()
+                ) {
+                    libraryContentSource.restore()
+                }
                 boundedPrefill(
                     route = Screen.TimelineScreen(),
                     selectedRoute = route,
@@ -64,15 +69,6 @@ class StartupPrefill @Inject constructor(
                     cached = { cache.readAlbums() != null },
                     awaitReady = {
                         distributor.albumsFlow.first { !it.isLoading }
-                    }
-                )
-                boundedPrefill(
-                    route = Screen.LibraryScreen(),
-                    selectedRoute = route,
-                    onError = onError,
-                    cached = { true },
-                    awaitReady = {
-                        libraryCategorySource.categories.first { it != null }
                     }
                 )
             }

@@ -8,6 +8,8 @@ package com.dot.gallery.core.startup
 import android.view.ViewTreeObserver
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.platform.LocalView
 import com.dot.gallery.core.metrics.StartupTracer
 
@@ -18,9 +20,11 @@ fun StartupContentEffect(
     releaseGate: Boolean = true,
     committedLabel: String? = null,
     drawnLabel: String? = null,
+    onContentDrawn: (() -> Unit)? = null,
 ) {
     val view = LocalView.current
     val gate = LocalStartupWorkGate.current ?: return
+    val currentOnContentDrawn by rememberUpdatedState(onContentDrawn)
     DisposableEffect(view, gate, route, ready, releaseGate, committedLabel, drawnLabel) {
         if (!ready) return@DisposableEffect onDispose { }
         var active = true
@@ -41,6 +45,7 @@ fun StartupContentEffect(
                                 committedLabel ?: "Startup.contentFrameCommitted($route)"
                             ) { }
                             if (releaseGate) gate.onContentDrawn()
+                            currentOnContentDrawn?.invoke()
                         }
                     }
                     view.viewTreeObserver.registerFrameCommitCallback(committed)
@@ -51,6 +56,7 @@ fun StartupContentEffect(
                                 drawnLabel ?: "Startup.contentDrawn($route)"
                             ) { }
                             if (releaseGate) gate.onContentDrawn()
+                            currentOnContentDrawn?.invoke()
                         }
                     }
                 }

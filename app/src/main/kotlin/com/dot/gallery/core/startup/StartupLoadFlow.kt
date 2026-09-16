@@ -33,7 +33,7 @@ internal fun <T> startupLoadFlow(
         }
         val initial = cached ?: boundedSource?.invoke()
         if (initial != null) {
-            emit(Resource.Success(initial))
+            emit(Resource.Success(initial, isPartial = true))
             emitted = true
             awaitFirstContent()
         }

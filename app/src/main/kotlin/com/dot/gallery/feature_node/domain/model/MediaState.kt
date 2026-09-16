@@ -21,5 +21,9 @@ data class MediaState<Type: Media>(
      */
     val cloudBackups: Map<Long, List<Media.UriMedia>> = emptyMap(),
     val error: String = "",
-    val isLoading: Boolean = true
+    val isLoading: Boolean = true,
+    val isPartial: Boolean = false
 )
+
+internal fun MediaState<*>.isCompleteForLibrary(): Boolean =
+    !isLoading && !isPartial && error.isEmpty()

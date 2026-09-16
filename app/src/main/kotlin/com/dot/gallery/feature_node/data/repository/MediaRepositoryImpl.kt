@@ -235,7 +235,7 @@ class MediaRepositoryImpl(
     ): Resource<List<UriMedia>> {
         val enriched = data?.map { item -> index[item.id]?.applyTo(item) ?: item }
         return when (this) {
-            is Resource.Success -> Resource.Success(enriched.orEmpty())
+            is Resource.Success -> Resource.Success(enriched.orEmpty(), isPartial = isPartial)
             is Resource.Error -> Resource.Error(message.orEmpty(), enriched)
         }
     }
@@ -308,7 +308,10 @@ class MediaRepositoryImpl(
         )
         return combine(source, captureTimeIndexFlow) { resource, index ->
             when (val enriched = resource.withCaptureTimeIndex(index)) {
-                is Resource.Success -> Resource.Success(sortTimeline(enriched.data.orEmpty()))
+                is Resource.Success -> Resource.Success(
+                    sortTimeline(enriched.data.orEmpty()),
+                    isPartial = enriched.isPartial
+                )
                 is Resource.Error -> Resource.Error(
                     enriched.message.orEmpty(),
                     enriched.data?.let(::sortTimeline)

@@ -135,7 +135,9 @@ fun EditableLibraryShortcutsGrid(
     val density = LocalDensity.current
     val tileHeight = TILE_HEIGHT
 
-    val tiles = remember { mutableStateListOf<LibraryShortcutPref>() }
+    val tiles = remember {
+        mutableStateListOf<LibraryShortcutPref>().also { it.addAll(working) }
+    }
     var draggingId by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(working, draggingId) {
