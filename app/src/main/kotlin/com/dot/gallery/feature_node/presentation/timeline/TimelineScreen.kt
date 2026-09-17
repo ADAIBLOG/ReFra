@@ -63,7 +63,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.dp
-import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
@@ -187,6 +186,7 @@ fun TimelineScreen(
     isScrolling: MutableState<Boolean>,
     mediaState: State<MediaState<Media.UriMedia>>,
     metadataState: State<MediaMetadataState>,
+    storyCardsViewModel: StoryCardsViewModel? = null,
     sharedTransitionScope: SharedTransitionScope,
     animatedContentScope: AnimatedContentScope,
 ) {
@@ -305,8 +305,11 @@ fun TimelineScreen(
     val showWhatsNew = remember(lastSeenVersion) { lastSeenVersion != BuildConfig.VERSION_NAME }
 
     // Story Cards
-    val storyCardsViewModel = hiltViewModel<StoryCardsViewModel>()
-    val storyCards by storyCardsViewModel.allCards.collectAsStateWithLifecycle()
+    val storyCards = if (storyCardsViewModel != null) {
+        storyCardsViewModel.allCards.collectAsStateWithLifecycle().value
+    } else {
+        emptyList()
+    }
 
     val hasStoryCards = storyCards?.isNotEmpty() == true
     val aboveGridContent: @Composable (() -> Unit)? = if (showWhatsNew || hasStoryCards) {
@@ -336,8 +339,8 @@ fun TimelineScreen(
                 if (hasStoryCards) {
                     StoryCardsRow(
                         cards = storyCards.orEmpty(),
-                        onCardClick = { _, card ->
-                            eventHandler.navigate(Screen.StoryViewerScreen.cardId(card.id))
+                        onCardClick = { card ->
+                            storyCardsViewModel?.prepareViewer(card.id)
                         },
                         modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
                         contentPadding = PaddingValues(horizontal = 32.dp)

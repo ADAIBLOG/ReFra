@@ -25,10 +25,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.datastore.preferences.core.emptyPreferences
 import com.dot.gallery.core.Constants
@@ -54,7 +56,10 @@ import com.dot.gallery.core.util.LocalInitialPreferences
 import com.dot.gallery.core.util.SetupMediaProviders
 import com.dot.gallery.feature_node.domain.model.UIEvent
 import com.dot.gallery.feature_node.domain.util.EventHandler
+import com.dot.gallery.feature_node.presentation.storycards.StoryCardsViewModel
+import com.dot.gallery.feature_node.presentation.storycards.StoryViewerScreen
 import com.dot.gallery.feature_node.presentation.util.LocalHazeState
+import com.dot.gallery.feature_node.presentation.util.Screen
 import com.dot.gallery.feature_node.presentation.util.printWarning
 import com.dot.gallery.feature_node.presentation.util.toggleOrientation
 import com.dot.gallery.ui.theme.GalleryTheme
@@ -151,6 +156,12 @@ class MainActivity : AppCompatActivity() {
                             blurEnabled = allowBlur
                         )
                         val navController = rememberNavController()
+                        val storyCardsViewModel = hiltViewModel<StoryCardsViewModel>()
+                        val storyViewerSnapshot by storyCardsViewModel.viewerSnapshot.collectAsStateWithLifecycle()
+                        val navBackStackEntry by navController.currentBackStackEntryAsState()
+                        val isStoryViewerRoute = navBackStackEntry?.destination?.route
+                            ?.contains(Screen.StoryViewerScreen.route) == true
+                        val storyViewerOverlayVisible = storyViewerSnapshot != null && !isStoryViewerRoute
                         val isScrolling = remember { mutableStateOf(false) }
                         val bottomBarState = rememberSaveable { mutableStateOf(true) }
                         val systemBarFollowThemeState = rememberSaveable { mutableStateOf(true) }
@@ -232,7 +243,25 @@ class MainActivity : AppCompatActivity() {
                                             navController = navController,
                                             paddingValues = paddingValues,
                                             bottomBarState = bottomBarState.value,
-                                            isScrolling = isScrolling.value
+                                            isScrolling = isScrolling.value,
+                                            overlayVisible = storyViewerOverlayVisible,
+                                            overlayContent = {
+                                                val snapshot = storyViewerSnapshot
+                                                if (snapshot != null && storyViewerOverlayVisible) {
+                                                    val metadata by storyCardsViewModel.metadataFlow
+                                                        .collectAsStateWithLifecycle()
+                                                    val metadataMap = remember(metadata) {
+                                                        metadata.associateBy { it.mediaId }
+                                                    }
+                                                    StoryViewerScreen(
+                                                        cards = snapshot.cards,
+                                                        initialCardId = snapshot.initialCardId,
+                                                        metadataMap = metadataMap,
+                                                        onEnsureMetadata = storyCardsViewModel::ensureMetadataAvailable,
+                                                        onDismiss = storyCardsViewModel::clearViewerSnapshot,
+                                                    )
+                                                }
+                                            },
                                         ) {
                                             NavigationComp(
                                                 navController = navController,
@@ -241,6 +270,7 @@ class MainActivity : AppCompatActivity() {
                                                 systemBarFollowThemeState = systemBarFollowThemeState,
                                                 toggleRotate = ::toggleOrientation,
                                                 isScrolling = isScrolling,
+                                                storyCardsViewModel = storyCardsViewModel,
                                                 initialStartDestination = initialStartDestination
                                             )
                                         }

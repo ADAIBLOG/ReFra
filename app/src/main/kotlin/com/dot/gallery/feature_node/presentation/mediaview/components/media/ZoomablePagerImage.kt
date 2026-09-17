@@ -88,6 +88,7 @@ import com.dot.gallery.feature_node.domain.util.isPsd
 import com.dot.gallery.feature_node.domain.util.isRaw
 import com.dot.gallery.feature_node.domain.util.isSvg
 import com.dot.gallery.feature_node.domain.util.isTiff
+import com.dot.gallery.feature_node.domain.util.isVideo
 import com.dot.gallery.feature_node.presentation.mediaview.LocalMediaViewerVisualPolicy
 import com.dot.gallery.feature_node.presentation.mediaview.rememberedDerivedState
 import com.dot.gallery.feature_node.presentation.util.rememberFeedbackManager
@@ -244,7 +245,7 @@ fun <T : Media> BlurredMediaBackground(
                 request = ComposableImageRequest(media.getUri().toString()) {
                     resize(width = 600, height = 600, precision = Precision.LESS_PIXELS)
                     crossfade(false)
-                    setExtra("realMimeType", media.mimeType)
+                    if (!media.isVideo) setExtra("realMimeType", media.mimeType)
                     // Bust the cache when the underlying file changes (#1004).
                     setExtra(key = "mediaVersion", value = "${media.timestamp}:${media.size}")
                     if (isEncrypted) {

@@ -8,6 +8,8 @@ package com.dot.gallery.feature_node.presentation.mediaview.components.video
 import androidx.media3.common.Player
 import com.dot.gallery.cloud.core.CloudAccountRuntimeSettings
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VideoPlayerLoopPolicyTest {
@@ -71,6 +73,20 @@ class VideoPlayerLoopPolicyTest {
             Player.REPEAT_MODE_ONE,
             effectiveVideoRepeatMode(Player.REPEAT_MODE_ONE, slideshowActive = false)
         )
+    }
+
+    @Test
+    fun storyAndSlideshowModesPlayVideoOnce() {
+        assertTrue(shouldPlayVideoOnce(slideshowActive = true, storyActive = false))
+        assertTrue(shouldPlayVideoOnce(slideshowActive = false, storyActive = true))
+        assertTrue(shouldPlayVideoOnce(slideshowActive = true, storyActive = true))
+        assertFalse(shouldPlayVideoOnce(slideshowActive = false, storyActive = false))
+    }
+
+    @Test
+    fun storyVideoUsesCompositedTextureOutput() {
+        assertTrue(shouldUseTextureVideoOutput(storyActive = true))
+        assertFalse(shouldUseTextureVideoOutput(storyActive = false))
     }
 
     @Test

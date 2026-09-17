@@ -2,6 +2,7 @@ package com.dot.gallery.feature_node.presentation.mediaview.components.video
 
 import android.net.Uri
 import android.view.SurfaceView
+import android.view.TextureView
 import android.view.View
 import androidx.media3.common.Player
 import androidx.media3.ui.SubtitleView
@@ -83,6 +84,11 @@ import com.dot.gallery.feature_node.presentation.util.rememberSurfaceCapture
 import dev.chrisbanes.haze.hazeSource
 import kotlinx.coroutines.launch
 
+internal fun shouldPlayVideoOnce(slideshowActive: Boolean, storyActive: Boolean): Boolean =
+    slideshowActive || storyActive
+
+internal fun shouldUseTextureVideoOutput(storyActive: Boolean): Boolean = storyActive
+
 @OptIn(UnstableApi::class)
 @Composable
 fun <T : Media> VideoPlayer(
@@ -95,6 +101,7 @@ fun <T : Media> VideoPlayer(
     onZoomChange: (Boolean) -> Unit = {},
     captureBlur: Boolean = true,
     slideshowActive: Boolean = false,
+    storyActive: Boolean = false,
     onLoadFailed: () -> Unit = {},
     onVideoEnded: () -> Unit = {}
 ) {
@@ -175,12 +182,14 @@ fun <T : Media> VideoPlayer(
     // Slideshow mode: play the video through once (no looping) and mute audio, then notify the
     // host so it can advance to the next item when playback ends.
     val updatedOnVideoEnded by rememberUpdatedState(onVideoEnded)
-    DisposableEffect(currentPlayer, slideshowActive) {
-        vm.setSlideshowActive(slideshowActive)
-        if (!slideshowActive) {
+    val playOnce = shouldPlayVideoOnce(slideshowActive, storyActive)
+    DisposableEffect(currentPlayer, playOnce, slideshowActive) {
+        vm.setSlideshowActive(playOnce)
+        if (!playOnce) {
             return@DisposableEffect onDispose { }
         }
-        if (!currentPlayer.isReleased) {
+        val previousVolume = currentPlayer.volume
+        if (slideshowActive && !currentPlayer.isReleased) {
             currentPlayer.volume = 0f
         }
         val listener = object : Player.Listener {
@@ -195,6 +204,7 @@ fun <T : Media> VideoPlayer(
             vm.setSlideshowActive(false)
             if (!currentPlayer.isReleased) {
                 currentPlayer.removeListener(listener)
+                if (slideshowActive) currentPlayer.volume = previousVolume
             }
         }
     }
@@ -386,38 +396,48 @@ fun <T : Media> VideoPlayer(
                 }
             }
             // Recreate the surface per media so a switched group member binds to its own player.
-            key(media.id) {
+            key(media.id, storyActive) {
                 AndroidView(
                     factory = { ctx ->
-                        SurfaceView(ctx).also { sv ->
-                            surfaceViewRef = sv
-                            // #967 workaround: re-bind the player surface whenever the
-                            // system bars are shown/hidden, so the video keeps presenting
-                            // through immersive transitions on affected devices.
-                            var lastBarsVisible: Boolean? = null
-                            ViewCompat.setOnApplyWindowInsetsListener(sv) { v, insets ->
-                                if (rebindEnabledState.value) {
-                                    val barsVisible =
-                                        insets.isVisible(WindowInsetsCompat.Type.systemBars())
-                                    if (lastBarsVisible != null && lastBarsVisible != barsVisible) {
-                                        v.post {
-                                            val p = playerForRebind.value
-                                            if (!p.isReleased && v is SurfaceView) {
-                                                runCatching { p.setVideoSurfaceView(v) }
+                        if (shouldUseTextureVideoOutput(storyActive)) {
+                            TextureView(ctx).also {
+                                it.isOpaque = false
+                                surfaceViewRef = it
+                            }
+                        } else {
+                            SurfaceView(ctx).also { sv ->
+                                surfaceViewRef = sv
+                                // #967 workaround: re-bind the player surface whenever the
+                                // system bars are shown/hidden, so the video keeps presenting
+                                // through immersive transitions on affected devices.
+                                var lastBarsVisible: Boolean? = null
+                                ViewCompat.setOnApplyWindowInsetsListener(sv) { v, insets ->
+                                    if (rebindEnabledState.value) {
+                                        val barsVisible =
+                                            insets.isVisible(WindowInsetsCompat.Type.systemBars())
+                                        if (lastBarsVisible != null && lastBarsVisible != barsVisible) {
+                                            v.post {
+                                                val p = playerForRebind.value
+                                                if (!p.isReleased && v is SurfaceView) {
+                                                    runCatching { p.setVideoSurfaceView(v) }
+                                                }
+                                                v.invalidate()
+                                                v.requestLayout()
                                             }
-                                            v.invalidate()
-                                            v.requestLayout()
                                         }
+                                        lastBarsVisible = barsVisible
                                     }
-                                    lastBarsVisible = barsVisible
+                                    insets
                                 }
-                                insets
                             }
                         }
                     },
-                    update = { sv ->
+                    update = { outputView ->
                         if (!currentPlayer.isReleased) {
-                            currentPlayer.setVideoSurfaceView(sv)
+                            when (outputView) {
+                                is SurfaceView -> currentPlayer.setVideoSurfaceView(outputView)
+                                is TextureView -> currentPlayer.setVideoTextureView(outputView)
+                            }
                         }
                     },
                     modifier = Modifier

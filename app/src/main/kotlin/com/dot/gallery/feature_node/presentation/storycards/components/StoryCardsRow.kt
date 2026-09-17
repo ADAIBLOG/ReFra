@@ -5,7 +5,6 @@
 
 package com.dot.gallery.feature_node.presentation.storycards.components
 
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -19,7 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Cloud
@@ -32,8 +31,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -41,11 +38,17 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.dot.gallery.core.Settings.Misc.rememberAllowBlur
+import com.dot.gallery.R
 import com.dot.gallery.feature_node.domain.model.StoryCard
 import com.dot.gallery.feature_node.domain.model.StoryCardType
 import com.dot.gallery.feature_node.domain.util.getUri
@@ -53,30 +56,32 @@ import com.github.panpf.sketch.AsyncImage
 import com.github.panpf.sketch.request.ComposableImageRequest
 import com.github.panpf.sketch.resize.Precision
 import com.dot.gallery.ui.theme.BlackScrim
-import com.dot.gallery.ui.theme.WhiterBlackScrim
-import com.dot.gallery.ui.theme.isDarkTheme
+
+const val StoryCardsRowTag = "StoryCards.Row"
+fun storyCardTag(id: Long) = "StoryCards.Card.$id"
 
 @Composable
 fun StoryCardsRow(
     cards: List<StoryCard>,
-    onCardClick: (index: Int, card: StoryCard) -> Unit,
+    onCardClick: (card: StoryCard) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(horizontal = 16.dp)
 ) {
     if (cards.isEmpty()) return
 
     LazyRow(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().testTag(StoryCardsRowTag),
         contentPadding = contentPadding,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        itemsIndexed(
+        items(
             items = cards,
-            key = { _, card -> card.id }
-        ) { index, card ->
+            key = { card -> card.id }
+        ) { card ->
             StoryCardItem(
                 card = card,
-                onClick = { onCardClick(index, card) }
+                onClick = { onCardClick(card) },
+                modifier = Modifier.testTag(storyCardTag(card.id)),
             )
         }
     }
@@ -88,14 +93,8 @@ private fun StoryCardItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val isDarkTheme = isDarkTheme()
-    val allowBlur by rememberAllowBlur()
-    val followTheme = remember(allowBlur) { !allowBlur }
-    val gradientColor by animateColorAsState(
-        if (followTheme) {
-            if (isDarkTheme) BlackScrim else WhiterBlackScrim
-        } else BlackScrim,
-    )
+    val typeLabel = stringResource(card.type.displayNameRes)
+    val cardDescription = listOfNotNull(typeLabel, card.title, card.subtitle).joinToString(". ")
 
     Box(
         modifier = modifier
@@ -103,6 +102,10 @@ private fun StoryCardItem(
             .height(220.dp)
             .clip(RoundedCornerShape(20.dp))
             .clickable(onClick = onClick)
+            .semantics {
+                role = Role.Button
+                contentDescription = cardDescription
+            }
     ) {
         if (card.thumbnailMedia != null) {
             AsyncImage(
@@ -112,7 +115,7 @@ private fun StoryCardItem(
                 },
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
-                contentDescription = card.title,
+                contentDescription = null,
             )
         } else {
             Box(
@@ -138,7 +141,7 @@ private fun StoryCardItem(
                     Brush.verticalGradient(
                         colors = listOf(
                             Color.Transparent,
-                            gradientColor
+                            BlackScrim
                         )
                     )
                 )
@@ -172,14 +175,14 @@ private fun StoryCardItem(
                 .align(Alignment.TopStart)
                 .padding(8.dp)
                 .background(
-                    color = Color.Black.copy(alpha = 0.4f),
+                    color = Color.Black.copy(alpha = 0.6f),
                     shape = RoundedCornerShape(8.dp)
                 )
                 .padding(4.dp)
         ) {
             Icon(
                 imageVector = card.type.icon,
-                contentDescription = card.type.name,
+                contentDescription = null,
                 modifier = Modifier.size(16.dp),
                 tint = Color.White
             )
@@ -195,4 +198,14 @@ private val StoryCardType.icon: ImageVector
         StoryCardType.LOCATIONS -> Icons.Outlined.LocationOn
         StoryCardType.FAVORITES -> Icons.Outlined.Favorite
         StoryCardType.CLOUD_MEMORIES -> Icons.Outlined.Cloud
+    }
+
+private val StoryCardType.displayNameRes: Int
+    get() = when (this) {
+        StoryCardType.MEMORIES -> R.string.story_type_memories
+        StoryCardType.ALBUMS -> R.string.story_type_albums
+        StoryCardType.CATEGORIES -> R.string.story_type_categories
+        StoryCardType.LOCATIONS -> R.string.story_type_locations
+        StoryCardType.FAVORITES -> R.string.story_type_favorites
+        StoryCardType.CLOUD_MEMORIES -> R.string.story_type_cloud_memories
     }

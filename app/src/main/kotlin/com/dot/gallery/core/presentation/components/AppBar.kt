@@ -16,6 +16,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -54,8 +55,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -110,6 +113,8 @@ fun rememberNavigationItems(): List<NavigationItem> {
     }
 }
 
+const val AppBarOverlayContentTag = "AppBarContainer.Overlay"
+
 @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
 @Stable
 @Composable
@@ -118,6 +123,8 @@ fun AppBarContainer(
     bottomBarState: Boolean,
     paddingValues: PaddingValues,
     isScrolling: Boolean,
+    overlayVisible: Boolean = false,
+    overlayContent: @Composable BoxScope.() -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     val context = LocalContext.current
@@ -153,17 +160,27 @@ fun AppBarContainer(
         targetValue = if (showNavRail) ComponentSize.NavigationRailWidth else 0.dp,
         label = "animatedPadding"
     )
+    val overlayIsolationModifier = if (overlayVisible) {
+        Modifier.clearAndSetSemantics { }
+    } else {
+        Modifier
+    }
 
     // Render the content exactly once. Toggling "use material navigation" must only swap the
     // navigation bars below, not the whole app content. Previously content() was nested inside
     // both the useOldNavbar and !useOldNavbar AnimatedVisibility blocks, so flipping the setting
     // cross-faded (and recomposed) the entire screen, making it blink (#973).
     Box(modifier = Modifier.fillMaxSize()) {
-        Box(modifier = Modifier.padding(start = animatedPadding)) {
+        Box(
+            modifier = Modifier
+                .padding(start = animatedPadding)
+                .then(overlayIsolationModifier)
+        ) {
             content()
         }
         // Adaptive rail (wide) or the selected compact bottom-bar style.
         AnimatedVisibility(
+            modifier = overlayIsolationModifier,
             visible = showNavRail,
             enter = slideInHorizontally {
                 navigationRailSlideOffset(it, layoutDirection)
@@ -179,7 +196,7 @@ fun AppBarContainer(
             )
         }
         AnimatedVisibility(
-            modifier = Modifier.align(Alignment.BottomCenter),
+            modifier = Modifier.align(Alignment.BottomCenter).then(overlayIsolationModifier),
             visible = showClassicNavbar,
             enter = slideInVertically { it * 2 },
             exit = slideOutVertically { it * 2 },
@@ -195,7 +212,8 @@ fun AppBarContainer(
         AnimatedVisibility(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(bottom = rememberBottomBarInset(paddingValues)),
+                .padding(bottom = rememberBottomBarInset(paddingValues))
+                .then(overlayIsolationModifier),
             visible = showMaterialNavbar,
             enter = slideInVertically { it * 2 },
             exit = slideOutVertically { it * 2 },
@@ -208,6 +226,13 @@ fun AppBarContainer(
                 )
             }
         )
+        if (overlayVisible) {
+            Box(Modifier.fillMaxSize().testTag(AppBarOverlayContentTag)) {
+                overlayContent()
+            }
+        } else {
+            overlayContent()
+        }
     }
 }
 

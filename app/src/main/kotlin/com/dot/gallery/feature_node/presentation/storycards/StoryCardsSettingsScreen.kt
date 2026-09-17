@@ -15,12 +15,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -48,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -61,12 +60,19 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.sp
 import com.dot.gallery.R
 import com.dot.gallery.core.Position
@@ -87,23 +93,35 @@ fun StoryCardsSettingsScreen(
     var config by rememberStoryCardsConfig()
     var autoAdvance by rememberStoryViewerAutoAdvance()
     var duration by rememberStoryViewerDuration()
+    var draftOrder by remember(config.normalizedOrder) { mutableStateOf(config.normalizedOrder) }
 
+    val title = stringResource(R.string.story_cards_settings_title)
     val scrollBehavior =
         TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
 
     // Drag-to-reorder state
     var draggingIndex by remember { mutableIntStateOf(-1) }
     var dragOffsetY by remember { mutableFloatStateOf(0f) }
+    val rowHeights = remember { mutableStateMapOf<StoryCardType, Int>() }
     val haptic = LocalHapticFeedback.current
     val density = LocalDensity.current
-    val itemHeightPx = remember(density) { with(density) { 72.dp.toPx() } }
+    val fallbackItemHeightPx = remember(density) { with(density) { 72.dp.toPx() } }
+
+    fun updateOrder(from: Int, to: Int, persist: Boolean) {
+        val updated = moveStoryCardType(draftOrder, from, to)
+        if (updated == draftOrder) return
+        draftOrder = updated
+        if (persist) config = config.copy(cardOrder = updated)
+    }
 
     Scaffold(
-        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        modifier = Modifier
+            .nestedScroll(scrollBehavior.nestedScrollConnection)
+            .semantics { paneTitle = title },
         topBar = {
             LargeTopAppBar(
-                title = { Text(stringResource(R.string.story_cards_settings_title)) },
-                navigationIcon = { NavigationBackButton() },
+                title = { Text(title, modifier = Modifier.semantics { heading() }) },
+                navigationIcon = { NavigationBackButton(forcedAction = onNavigateBack) },
                 scrollBehavior = scrollBehavior,
                 colors = TopAppBarDefaults.topAppBarColors(
                     scrolledContainerColor = MaterialTheme.colorScheme.surface
@@ -153,19 +171,21 @@ fun StoryCardsSettingsScreen(
 
             // ── Card Type Items (drag-to-reorder) ──
             itemsIndexed(
-                items = config.normalizedOrder,
+                items = draftOrder,
                 key = { _, type -> "card_${type.name}" }
             ) { index, type ->
-                val isEnabled = type !in config.disabledTypes
-                val position = cardItemPosition(index, config.normalizedOrder.size)
+                val isChecked = type !in config.disabledTypes
+                val position = cardItemPosition(index, draftOrder.size)
                 val isDragged = draggingIndex == index
 
                 CardTypeListItem(
                     type = type,
-                    isEnabled = isEnabled && config.enabled,
+                    isChecked = isChecked,
+                    enabled = config.enabled,
                     position = position,
                     isDragging = isDragged,
                     dragOffset = if (isDragged) dragOffsetY else 0f,
+                    onHeightChanged = { rowHeights[type] = it },
                     onDragStart = {
                         draggingIndex = index
                         dragOffsetY = 0f
@@ -173,29 +193,46 @@ fun StoryCardsSettingsScreen(
                     },
                     onDrag = { delta ->
                         dragOffsetY += delta
-                        val swapThreshold = itemHeightPx * 0.5f
-                        if (dragOffsetY > swapThreshold && draggingIndex < config.normalizedOrder.lastIndex) {
-                            val list = config.normalizedOrder.toMutableList()
-                            val item = list.removeAt(draggingIndex)
-                            list.add(draggingIndex + 1, item)
-                            config = config.copy(cardOrder = list)
-                            draggingIndex++
-                            dragOffsetY -= itemHeightPx
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        } else if (dragOffsetY < -swapThreshold && draggingIndex > 0) {
-                            val list = config.normalizedOrder.toMutableList()
-                            val item = list.removeAt(draggingIndex)
-                            list.add(draggingIndex - 1, item)
-                            config = config.copy(cardOrder = list)
-                            draggingIndex--
-                            dragOffsetY += itemHeightPx
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        val currentHeight = rowHeights[type]?.toFloat() ?: fallbackItemHeightPx
+                        if (draggingIndex < draftOrder.lastIndex) {
+                            val nextType = draftOrder[draggingIndex + 1]
+                            val nextHeight = rowHeights[nextType]?.toFloat() ?: fallbackItemHeightPx
+                            if (dragOffsetY > (currentHeight + nextHeight) * 0.5f) {
+                                updateOrder(draggingIndex, draggingIndex + 1, persist = false)
+                                draggingIndex++
+                                dragOffsetY -= nextHeight
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            }
+                        }
+                        if (draggingIndex > 0) {
+                            val previousType = draftOrder[draggingIndex - 1]
+                            val previousHeight = rowHeights[previousType]?.toFloat() ?: fallbackItemHeightPx
+                            if (dragOffsetY < -(currentHeight + previousHeight) * 0.5f) {
+                                updateOrder(draggingIndex, draggingIndex - 1, persist = false)
+                                draggingIndex--
+                                dragOffsetY += previousHeight
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            }
                         }
                     },
                     onDragEnd = {
+                        if (draftOrder != config.normalizedOrder) {
+                            config = config.copy(cardOrder = draftOrder)
+                        }
                         draggingIndex = -1
                         dragOffsetY = 0f
                     },
+                    onDragCancel = {
+                        draftOrder = config.normalizedOrder
+                        draggingIndex = -1
+                        dragOffsetY = 0f
+                    },
+                    onMoveUp = if (index > 0 && config.enabled) {
+                        { updateOrder(index, index - 1, persist = true) }
+                    } else null,
+                    onMoveDown = if (index < draftOrder.lastIndex && config.enabled) {
+                        { updateOrder(index, index + 1, persist = true) }
+                    } else null,
                     onToggle = { checked ->
                         val newDisabled = if (checked) {
                             config.disabledTypes - type
@@ -244,11 +281,12 @@ fun StoryCardsSettingsScreen(
                     item = SettingsEntity.SeekPreference(
                         title = stringResource(R.string.story_viewer_duration),
                         summary = stringResource(R.string.story_viewer_duration_summary, duration),
+                        enabled = autoAdvance,
                         minValue = 3f,
-                        currentValue = duration.toFloatOrNull() ?: 5f,
+                        currentValue = duration.toFloatOrNull()?.coerceIn(3f, 10f) ?: 5f,
                         maxValue = 10f,
                         step = 1,
-                        seekSuffix = "s",
+                        seekSuffix = stringResource(R.string.story_seconds_short),
                         onSeek = { duration = it.toInt().toString() },
                         screenPosition = Position.Bottom
                     ),
@@ -268,17 +306,41 @@ fun StoryCardsSettingsScreen(
 @Composable
 private fun CardTypeListItem(
     type: StoryCardType,
-    isEnabled: Boolean,
+    isChecked: Boolean,
+    enabled: Boolean,
     position: Position,
     isDragging: Boolean = false,
     dragOffset: Float = 0f,
+    onHeightChanged: (Int) -> Unit = {},
     onDragStart: () -> Unit = {},
     onDrag: (Float) -> Unit = {},
     onDragEnd: () -> Unit = {},
+    onDragCancel: () -> Unit = {},
+    onMoveUp: (() -> Unit)? = null,
+    onMoveDown: (() -> Unit)? = null,
     onToggle: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val backgroundColor = MaterialTheme.colorScheme.surfaceContainer
+    val displayName = stringResource(type.displayNameRes)
+    val description = stringResource(type.descriptionRes)
+    val moveUpLabel = stringResource(R.string.story_move_up, displayName)
+    val moveDownLabel = stringResource(R.string.story_move_down, displayName)
+    val moveActions = buildList {
+        onMoveUp?.let { action ->
+            add(CustomAccessibilityAction(moveUpLabel) {
+                action()
+                true
+            })
+        }
+        onMoveDown?.let { action ->
+            add(CustomAccessibilityAction(moveDownLabel) {
+                action()
+                true
+            })
+        }
+    }
+    val contentActive = enabled && isChecked
 
     val fullCornerRadius by animateDpAsState(
         targetValue = 24.dp,
@@ -319,26 +381,32 @@ private fun CardTypeListItem(
     val currentOnDragStart by rememberUpdatedState(onDragStart)
     val currentOnDrag by rememberUpdatedState(onDrag)
     val currentOnDragEnd by rememberUpdatedState(onDragEnd)
+    val currentOnDragCancel by rememberUpdatedState(onDragCancel)
 
     Box(
         modifier = Modifier
             .then(paddingModifier)
+            .onSizeChanged { onHeightChanged(it.height) }
+            .zIndex(if (isDragging) 1f else 0f)
+            .semantics(mergeDescendants = true) { customActions = moveActions }
             .graphicsLayer {
                 translationY = dragOffset
                 shadowElevation = elevation
                 scaleX = if (isDragging) 1.02f else 1f
                 scaleY = if (isDragging) 1.02f else 1f
             }
-            .pointerInput(Unit) {
-                detectDragGesturesAfterLongPress(
-                    onDragStart = { currentOnDragStart() },
-                    onDrag = { change, offset ->
-                        change.consume()
-                        currentOnDrag(offset.y)
-                    },
-                    onDragEnd = { currentOnDragEnd() },
-                    onDragCancel = { currentOnDragEnd() }
-                )
+            .pointerInput(enabled) {
+                if (enabled) {
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { currentOnDragStart() },
+                        onDrag = { change, offset ->
+                            change.consume()
+                            currentOnDrag(offset.y)
+                        },
+                        onDragEnd = { currentOnDragEnd() },
+                        onDragCancel = { currentOnDragCancel() }
+                    )
+                }
             }
     ) {
         Box(
@@ -379,7 +447,7 @@ private fun CardTypeListItem(
                             .padding(end = 12.dp)
                             .size(22.dp),
                         colorFilter = ColorFilter.tint(
-                            if (isEnabled) MaterialTheme.colorScheme.primary
+                            if (contentActive) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                         )
                     )
@@ -390,19 +458,19 @@ private fun CardTypeListItem(
                         verticalArrangement = Arrangement.Center
                     ) {
                         Text(
-                            text = type.displayName,
+                            text = displayName,
                             style = MaterialTheme.typography.titleMedium,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = if (isEnabled) MaterialTheme.colorScheme.onSurface
+                            color = if (contentActive) MaterialTheme.colorScheme.onSurface
                             else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                         )
                         Text(
-                            text = type.description,
+                            text = description,
                             style = MaterialTheme.typography.bodySmall,
                             fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(
-                                alpha = if (isEnabled) 1f else 0.38f
+                                alpha = if (contentActive) 1f else 0.38f
                             ),
                             modifier = Modifier.padding(top = 2.dp)
                         )
@@ -410,7 +478,8 @@ private fun CardTypeListItem(
 
                     // Toggle
                     Switch(
-                        checked = isEnabled,
+                        checked = isChecked,
+                        enabled = enabled,
                         onCheckedChange = onToggle
                     )
                 }
@@ -429,8 +498,17 @@ private fun SectionHeader(title: String, modifier: Modifier = Modifier) {
         text = title,
         style = MaterialTheme.typography.titleMedium,
         color = MaterialTheme.colorScheme.onSurface,
-        modifier = modifier
+        modifier = modifier.semantics { heading() }
     )
+}
+
+internal fun moveStoryCardType(
+    order: List<StoryCardType>,
+    from: Int,
+    to: Int,
+): List<StoryCardType> {
+    if (from !in order.indices || to !in order.indices || from == to) return order
+    return order.toMutableList().apply { add(to, removeAt(from)) }
 }
 
 private fun cardItemPosition(index: Int, size: Int): Position {
@@ -452,22 +530,22 @@ private val StoryCardType.settingsIcon: ImageVector
         StoryCardType.CLOUD_MEMORIES -> Icons.Outlined.Cloud
     }
 
-private val StoryCardType.displayName: String
+private val StoryCardType.displayNameRes: Int
     get() = when (this) {
-        StoryCardType.MEMORIES -> "Memories"
-        StoryCardType.ALBUMS -> "Albums"
-        StoryCardType.CATEGORIES -> "Categories"
-        StoryCardType.LOCATIONS -> "Locations"
-        StoryCardType.FAVORITES -> "Favorites"
-        StoryCardType.CLOUD_MEMORIES -> "Cloud Memories"
+        StoryCardType.MEMORIES -> R.string.story_type_memories
+        StoryCardType.ALBUMS -> R.string.story_type_albums
+        StoryCardType.CATEGORIES -> R.string.story_type_categories
+        StoryCardType.LOCATIONS -> R.string.story_type_locations
+        StoryCardType.FAVORITES -> R.string.story_type_favorites
+        StoryCardType.CLOUD_MEMORIES -> R.string.story_type_cloud_memories
     }
 
-private val StoryCardType.description: String
+private val StoryCardType.descriptionRes: Int
     get() = when (this) {
-        StoryCardType.MEMORIES -> "Photos from this day in previous years"
-        StoryCardType.ALBUMS -> "Highlighted and pinned albums"
-        StoryCardType.CATEGORIES -> "AI-classified photo categories"
-        StoryCardType.LOCATIONS -> "Photos organized by location"
-        StoryCardType.FAVORITES -> "Your favorite photos"
-        StoryCardType.CLOUD_MEMORIES -> "\"On this day\" memories from your cloud server"
+        StoryCardType.MEMORIES -> R.string.story_type_memories_description
+        StoryCardType.ALBUMS -> R.string.story_type_albums_description
+        StoryCardType.CATEGORIES -> R.string.story_type_categories_description
+        StoryCardType.LOCATIONS -> R.string.story_type_locations_description
+        StoryCardType.FAVORITES -> R.string.story_type_favorites_description
+        StoryCardType.CLOUD_MEMORIES -> R.string.story_type_cloud_memories_description
     }

@@ -5,7 +5,6 @@
 
 package com.dot.gallery.feature_node.domain.model
 
-import android.net.Uri
 import androidx.compose.runtime.Stable
 import kotlinx.serialization.Serializable
 
@@ -33,10 +32,7 @@ data class StoryCardsConfig(
 ) {
     /** cardOrder with any newly-added types appended (handles config persisted before the type existed). */
     val normalizedOrder: List<StoryCardType>
-        get() {
-            val missing = StoryCardType.entries - cardOrder.toSet()
-            return if (missing.isEmpty()) cardOrder else cardOrder + missing
-        }
+        get() = (cardOrder + StoryCardType.entries).distinct()
 
     val activeTypes: List<StoryCardType>
         get() = if (enabled) normalizedOrder.filter { it !in disabledTypes } else emptyList()
@@ -53,7 +49,6 @@ data class StoryCard(
     val type: StoryCardType,
     val title: String,
     val subtitle: String? = null,
-    val thumbnailUri: Uri? = null,
     val thumbnailMedia: Media.UriMedia? = null,
     val mediaList: List<Media.UriMedia> = emptyList(),
     val albumId: Long? = null,

@@ -12,31 +12,73 @@ import com.dot.gallery.R
 import com.dot.gallery.cloud.core.MemoryInfo
 import com.dot.gallery.cloud.core.ProviderRegistry
 import com.dot.gallery.cloud.core.capabilities.MemoriesCapableProvider
+import com.dot.gallery.cloud.core.stableIdHash
 import com.dot.gallery.core.MediaDistributor
 import com.dot.gallery.core.Resource
 import com.dot.gallery.core.Settings
 import com.dot.gallery.core.startup.StartupWorkGate
 import com.dot.gallery.feature_node.domain.model.Media
 import com.dot.gallery.feature_node.domain.model.MediaMetadata
+import com.dot.gallery.feature_node.domain.model.MediaState
 import com.dot.gallery.feature_node.domain.model.StoryCard
 import com.dot.gallery.feature_node.domain.model.StoryCardType
 import com.dot.gallery.feature_node.domain.model.StoryCardsConfig
 import com.dot.gallery.feature_node.domain.repository.MediaRepository
+import com.dot.gallery.feature_node.presentation.util.printError
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import java.util.Calendar
+import java.time.Instant
+import java.time.LocalDate
+import java.time.MonthDay
+import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 import javax.inject.Inject
+import kotlin.math.absoluteValue
+import kotlin.math.min
+
+data class StoryViewerSnapshot(
+    val cards: List<StoryCard>,
+    val initialCardId: Long,
+)
+
+internal fun createStoryViewerSnapshot(
+    cards: List<StoryCard>?,
+    initialCardId: Long,
+): StoryViewerSnapshot? = cards
+    ?.takeIf { list -> list.any { it.id == initialCardId } }
+    ?.let { StoryViewerSnapshot(cards = it.toList(), initialCardId = initialCardId) }
+
+private const val MAX_STORY_ITEMS = 20
+private const val STORY_DATE_REFERENCE_YEAR = 2000
+private const val STORY_DATE_REFERENCE_DAYS = 366L
+
+internal fun storyCardStableId(type: StoryCardType, sourceKey: String): Long =
+    stableIdHash("story-card/${type.name}/$sourceKey")
+
+internal fun annualDayDistance(first: MonthDay, second: MonthDay): Long {
+    val firstDate = first.atYear(STORY_DATE_REFERENCE_YEAR)
+    val secondDate = second.atYear(STORY_DATE_REFERENCE_YEAR)
+    val distance = ChronoUnit.DAYS.between(firstDate, secondDate).absoluteValue
+    return min(distance, STORY_DATE_REFERENCE_DAYS - distance)
+}
 
 @HiltViewModel
 class StoryCardsViewModel @Inject constructor(
@@ -54,7 +96,14 @@ class StoryCardsViewModel @Inject constructor(
         emitAll(this@afterFirstContent)
     }
 
-    private val timelineMedia = distributor.timelineMediaFlow
+    private val timelineMediaState = distributor.timelineMediaFlow
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            MediaState<Media.UriMedia>(),
+        )
+
+    private val timelineMedia = timelineMediaState
         .map { it.media }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -117,36 +166,65 @@ class StoryCardsViewModel @Inject constructor(
     }
 
     private fun loadCloudMemories() {
-        val providers = providerRegistry.getByCapability<MemoriesCapableProvider>()
-        if (providers.isEmpty()) return
         viewModelScope.launch {
-            startupGate.awaitFirstContent()
-            for (provider in providers) {
-                provider.getMemories().collect { resource ->
-                    when (resource) {
-                        is Resource.Success -> {
-                            val memories = resource.data ?: emptyList()
-                            _cloudMemoryCards.value = buildCloudMemoryCards(memories)
+            combine(configFlow, providerRegistry.connectionStates) { config, states ->
+                config to states
+            }.distinctUntilChanged().collectLatest { (config, _) ->
+                if (!config.enabled || StoryCardType.CLOUD_MEMORIES in config.disabledTypes) {
+                    _cloudMemoryCards.value = emptyList()
+                    return@collectLatest
+                }
+                startupGate.awaitFirstContent()
+                val providers = providerRegistry.getByCapability<MemoriesCapableProvider>()
+                _cloudMemoryCards.value = coroutineScope {
+                    providers.map { provider ->
+                        async {
+                            runCatching { provider.getMemories().first() }
+                                .fold(
+                                    onSuccess = { resource ->
+                                        if (resource is Resource.Error) {
+                                            printError(
+                                                "Story memories failed for ${provider.providerType}: " +
+                                                    resource.message.orEmpty()
+                                            )
+                                        }
+                                        buildCloudMemoryCards(resource.data.orEmpty())
+                                    },
+                                    onFailure = { error ->
+                                        printError(
+                                            "Story memories failed for ${provider.providerType}: " +
+                                                error.message.orEmpty()
+                                        )
+                                        emptyList()
+                                    },
+                                )
                         }
-                        is Resource.Error -> { /* Silently ignore — local memories still work */ }
-                    }
+                    }.awaitAll().flatten().distinctBy { it.id }
                 }
             }
         }
     }
 
     private fun buildCloudMemoryCards(memories: List<MemoryInfo>): List<StoryCard> {
-        return memories.filter { it.media.isNotEmpty() }.mapIndexed { index, memory ->
-            val currentYear = Calendar.getInstance().get(Calendar.YEAR)
+        val currentYear = LocalDate.now().year
+        return memories.filter { it.media.isNotEmpty() }.map { memory ->
             val yearsAgo = currentYear - memory.year
+            val storyMedia = memory.media.take(MAX_STORY_ITEMS)
             StoryCard(
-                id = 6_000_000L + memory.year.toLong() * 100 + index,
+                id = storyCardStableId(StoryCardType.CLOUD_MEMORIES, memory.accountKey),
                 type = StoryCardType.CLOUD_MEMORIES,
-                title = if (yearsAgo > 0) "$yearsAgo ${if (yearsAgo == 1) "year" else "years"} ago"
-                    else "This year",
-                subtitle = if (memory.year > 0) "${memory.year}" else null,
-                thumbnailMedia = memory.media.firstOrNull(),
-                mediaList = memory.media,
+                title = if (yearsAgo > 0) {
+                    context.resources.getQuantityString(
+                        R.plurals.story_years_ago,
+                        yearsAgo,
+                        yearsAgo,
+                    )
+                } else {
+                    context.getString(R.string.story_this_year)
+                },
+                subtitle = if (memory.year > 0) memory.year.toString() else null,
+                thumbnailMedia = storyMedia.firstOrNull(),
+                mediaList = storyMedia,
                 year = memory.year
             )
         }
@@ -166,13 +244,14 @@ class StoryCardsViewModel @Inject constructor(
             val categoryMedia = mediaIds.mapNotNull { mediaMap[it] }
                 .sortedByDescending { it.definedTimestamp }
             if (categoryMedia.isEmpty()) return@mapNotNull null
+            val storyMedia = categoryMedia.take(MAX_STORY_ITEMS)
             StoryCard(
-                id = 3_000_000L + cat.id,
+                id = storyCardStableId(StoryCardType.CATEGORIES, cat.id.toString()),
                 type = StoryCardType.CATEGORIES,
                 title = cat.name,
-                subtitle = "${cat.mediaCount} items",
-                thumbnailMedia = categoryMedia.firstOrNull(),
-                mediaList = categoryMedia.take(20),
+                subtitle = storyCountSubtitle(categoryMedia.size, storyMedia.size),
+                thumbnailMedia = storyMedia.firstOrNull(),
+                mediaList = storyMedia,
                 categoryId = cat.id
             )
         }
@@ -183,11 +262,11 @@ class StoryCardsViewModel @Inject constructor(
         storyCards,
         categoryCards,
         _cloudMemoryCards,
-        timelineMedia
-    ) { config, cards, catCards, cloudCards, media ->
+        timelineMediaState
+    ) { config, cards, catCards, cloudCards, mediaState ->
         // null = still loading (timeline hasn't loaded yet)
-        if (media.isEmpty()) return@combine null
-        if (!config.enabled) return@combine emptyList()
+        if (mediaState.isLoading) return@combine null
+        if (!config.enabled || mediaState.media.isEmpty()) return@combine emptyList()
         val merged = mutableListOf<StoryCard>()
         val orderedTypes = config.activeTypes
         for (type in orderedTypes) {
@@ -199,6 +278,19 @@ class StoryCardsViewModel @Inject constructor(
         }
         merged
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    private val _viewerSnapshot = MutableStateFlow<StoryViewerSnapshot?>(null)
+    val viewerSnapshot = _viewerSnapshot.asStateFlow()
+
+    fun prepareViewer(initialCardId: Long): Boolean {
+        val snapshot = createStoryViewerSnapshot(allCards.value, initialCardId) ?: return false
+        _viewerSnapshot.value = snapshot
+        return true
+    }
+
+    fun clearViewerSnapshot() {
+        _viewerSnapshot.value = null
+    }
 
     private var lastMetadataFetchId: Long? = null
 
@@ -215,65 +307,53 @@ class StoryCardsViewModel @Inject constructor(
         }
     }
 
-    private fun buildMemoryCards(media: List<Media.UriMedia>): List<StoryCard> {
-        val today = Calendar.getInstance()
-        val todayMonth = today.get(Calendar.MONTH)
-        val todayDay = today.get(Calendar.DAY_OF_MONTH)
-        val currentYear = today.get(Calendar.YEAR)
+    private fun storyCountSubtitle(total: Int, shown: Int): String =
+        if (shown < total) {
+            context.getString(R.string.story_highlight_count, shown, total)
+        } else {
+            context.resources.getQuantityString(R.plurals.story_item_count, total, total)
+        }
 
-        val cal = Calendar.getInstance()
+    private fun buildMemoryCards(media: List<Media.UriMedia>): List<StoryCard> {
+        val today = LocalDate.now()
+        val todayMonthDay = MonthDay.from(today)
+        val zoneId = ZoneId.systemDefault()
+        val datedMedia = media.map { item ->
+            item to Instant.ofEpochSecond(item.definedTimestamp).atZone(zoneId).toLocalDate()
+        }.filter { (_, date) -> date.year < today.year }
 
         // Exact day match first
-        var memories = media.filter { m ->
-            cal.timeInMillis = m.definedTimestamp * 1000L
-            val year = cal.get(Calendar.YEAR)
-            val month = cal.get(Calendar.MONTH)
-            val day = cal.get(Calendar.DAY_OF_MONTH)
-            year < currentYear && month == todayMonth && day == todayDay
-        }
+        var memories = datedMedia.filter { (_, date) -> MonthDay.from(date) == todayMonthDay }
 
         // Fallback: ±3 day window if fewer than 3 results
         if (memories.size < 3) {
-            memories = media.filter { m ->
-                cal.timeInMillis = m.definedTimestamp * 1000L
-                val year = cal.get(Calendar.YEAR)
-                val month = cal.get(Calendar.MONTH)
-                val day = cal.get(Calendar.DAY_OF_MONTH)
-                if (year >= currentYear) return@filter false
-
-                val mediaCal = Calendar.getInstance().apply {
-                    set(Calendar.YEAR, currentYear)
-                    set(Calendar.MONTH, month)
-                    set(Calendar.DAY_OF_MONTH, day)
-                }
-                val todayCal = Calendar.getInstance().apply {
-                    set(Calendar.YEAR, currentYear)
-                    set(Calendar.MONTH, todayMonth)
-                    set(Calendar.DAY_OF_MONTH, todayDay)
-                }
-                val diffMs = kotlin.math.abs(mediaCal.timeInMillis - todayCal.timeInMillis)
-                val diffDays = diffMs / (1000 * 60 * 60 * 24)
-                diffDays <= 3
+            memories = datedMedia.filter { (_, date) ->
+                annualDayDistance(MonthDay.from(date), todayMonthDay) <= 3
             }
         }
 
         if (memories.isEmpty()) return emptyList()
 
         // Group by year
-        val byYear = memories.groupBy { m ->
-            cal.timeInMillis = m.definedTimestamp * 1000L
-            cal.get(Calendar.YEAR)
-        }.toSortedMap(compareByDescending { it })
+        val byYear = memories.groupBy { (_, date) -> date.year }
+            .toSortedMap(compareByDescending { it })
 
         return byYear.map { (year, yearMedia) ->
-            val yearsAgo = currentYear - year
+            val yearsAgo = today.year - year
+            val storyMedia = yearMedia.map { it.first }
+                .sortedByDescending { it.definedTimestamp }
+                .take(MAX_STORY_ITEMS)
             StoryCard(
-                id = 1_000_000L + year.toLong(),
+                id = storyCardStableId(StoryCardType.MEMORIES, year.toString()),
                 type = StoryCardType.MEMORIES,
-                title = "$yearsAgo ${if (yearsAgo == 1) "year" else "years"} ago",
-                subtitle = "$year",
-                thumbnailMedia = yearMedia.firstOrNull(),
-                mediaList = yearMedia.sortedByDescending { it.definedTimestamp },
+                title = context.resources.getQuantityString(
+                    R.plurals.story_years_ago,
+                    yearsAgo,
+                    yearsAgo,
+                ),
+                subtitle = year.toString(),
+                thumbnailMedia = storyMedia.firstOrNull(),
+                mediaList = storyMedia,
                 year = year
             )
         }
@@ -296,27 +376,29 @@ class StoryCardsViewModel @Inject constructor(
 
         return highlighted.mapNotNull { album ->
             val albumMedia = mediaByAlbum[album.id] ?: return@mapNotNull null
-            val thumbnail = albumMedia.maxByOrNull { it.definedTimestamp }
+            val sorted = albumMedia.sortedByDescending { it.definedTimestamp }
+            val storyMedia = sorted.take(MAX_STORY_ITEMS)
             StoryCard(
-                id = 2_000_000L + album.id,
+                id = storyCardStableId(StoryCardType.ALBUMS, album.id.toString()),
                 type = StoryCardType.ALBUMS,
                 title = album.label,
-                subtitle = context.getString(R.string.category_media_count, album.count),
-                thumbnailMedia = thumbnail,
-                mediaList = albumMedia.sortedByDescending { it.definedTimestamp }.take(20),
+                subtitle = storyCountSubtitle(sorted.size, storyMedia.size),
+                thumbnailMedia = storyMedia.firstOrNull(),
+                mediaList = storyMedia,
                 albumId = album.id
             )
         }
     }
 
     private fun buildFavoritesCard(favorites: List<Media.UriMedia>): StoryCard {
+        val storyMedia = favorites.take(MAX_STORY_ITEMS)
         return StoryCard(
-            id = 4_000_000L,
+            id = storyCardStableId(StoryCardType.FAVORITES, "favorites"),
             type = StoryCardType.FAVORITES,
             title = context.getString(R.string.favorites),
-            subtitle = context.getString(R.string.category_media_count, favorites.size),
-            thumbnailMedia = favorites.firstOrNull(),
-            mediaList = favorites.take(20)
+            subtitle = storyCountSubtitle(favorites.size, storyMedia.size),
+            thumbnailMedia = storyMedia.firstOrNull(),
+            mediaList = storyMedia
         )
     }
 
@@ -339,15 +421,16 @@ class StoryCardsViewModel @Inject constructor(
             .take(5)
             .mapNotNull { (location, locationMedia) ->
                 val sorted = locationMedia.sortedByDescending { it.definedTimestamp }
+                val storyMedia = sorted.take(MAX_STORY_ITEMS)
                 val city = location.substringBefore(",").trim()
                 val country = location.substringAfterLast(", ").trim()
                 StoryCard(
-                    id = 5_000_000L + (location.hashCode().toLong() and 0xFFFFFFL),
+                    id = storyCardStableId(StoryCardType.LOCATIONS, location),
                     type = StoryCardType.LOCATIONS,
                     title = location,
-                    subtitle = "${locationMedia.size} items",
-                    thumbnailMedia = sorted.firstOrNull(),
-                    mediaList = sorted.take(20),
+                    subtitle = storyCountSubtitle(sorted.size, storyMedia.size),
+                    thumbnailMedia = storyMedia.firstOrNull(),
+                    mediaList = storyMedia,
                     locationCity = city,
                     locationCountry = country
                 )

@@ -180,6 +180,7 @@ fun NavigationComp(
     systemBarFollowThemeState: MutableState<Boolean>,
     toggleRotate: () -> Unit,
     isScrolling: MutableState<Boolean>,
+    storyCardsViewModel: StoryCardsViewModel? = null,
     initialStartDestination: String
 ) {
     val navViewModel = hiltViewModel<NavigationViewModel>()
@@ -291,7 +292,8 @@ fun NavigationComp(
                     sharedTransitionScope = this@SharedTransitionLayout,
                     animatedContentScope = this,
                     mediaState = timelineState(),
-                    metadataState = metadataState()
+                    metadataState = metadataState(),
+                    storyCardsViewModel = storyCardsViewModel,
                 )
             }
             composable(
@@ -1796,17 +1798,26 @@ fun NavigationComp(
                 val cardId = remember(backStackEntry) {
                     backStackEntry.arguments?.getLong("cardId") ?: -1L
                 }
-                val storyCardsViewModel = hiltViewModel<StoryCardsViewModel>()
-                val cards by storyCardsViewModel.allCards.collectAsStateWithLifecycle()
-                val metadata by storyCardsViewModel.metadataFlow.collectAsStateWithLifecycle()
+                val routeStoryCardsViewModel = storyCardsViewModel
+                    ?: hiltViewModel(viewModelStoreOwner = rootViewModelStoreOwner)
+                val cards by routeStoryCardsViewModel.allCards.collectAsStateWithLifecycle()
+                val snapshot by routeStoryCardsViewModel.viewerSnapshot.collectAsStateWithLifecycle()
+                val metadata by routeStoryCardsViewModel.metadataFlow.collectAsStateWithLifecycle()
                 val metadataMap = remember(metadata) { metadata.associateBy { it.mediaId } }
 
+                LaunchedEffect(cardId, cards, snapshot) {
+                    if (snapshot == null) routeStoryCardsViewModel.prepareViewer(cardId)
+                }
+
                 StoryViewerScreen(
-                    cards = cards,
-                    initialCardId = cardId,
+                    cards = snapshot?.cards ?: cards,
+                    initialCardId = snapshot?.initialCardId ?: cardId,
                     metadataMap = metadataMap,
-                    onEnsureMetadata = storyCardsViewModel::ensureMetadataAvailable,
-                    onDismiss = { navController.navigateUp() }
+                    onEnsureMetadata = routeStoryCardsViewModel::ensureMetadataAvailable,
+                    onDismiss = {
+                        routeStoryCardsViewModel.clearViewerSnapshot()
+                        navController.navigateUp()
+                    }
                 )
             }
 

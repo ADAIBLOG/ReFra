@@ -65,6 +65,7 @@ fun <T : Media> MediaPreviewComponent(
     // Slideshow mode: mutes video audio and, together with [onVideoEnded], lets the video play
     // through once (no looping) so the slideshow can advance when playback finishes.
     slideshowActive: Boolean = false,
+    storyActive: Boolean = false,
     cutoutEnabled: Boolean = true,
     onLoadFailed: () -> Unit = {},
     onVideoEnded: () -> Unit = {},
@@ -82,7 +83,7 @@ fun <T : Media> MediaPreviewComponent(
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             // Non-translating blurred background
-            if (!media!!.isVideo && !isPanorama && !isPhotosphere && renderBackground) {
+            if ((!media!!.isVideo || storyActive) && !isPanorama && !isPhotosphere && renderBackground) {
                 BlurredMediaBackground(
                     media = media,
                     uiEnabled = uiEnabled
@@ -112,6 +113,7 @@ fun <T : Media> MediaPreviewComponent(
                         onZoomChange = onZoomChange,
                         captureBlur = uiEnabled,
                         slideshowActive = slideshowActive,
+                        storyActive = storyActive,
                         onLoadFailed = onLoadFailed,
                         onVideoEnded = onVideoEnded
                     )
