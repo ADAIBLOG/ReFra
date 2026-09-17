@@ -114,6 +114,8 @@ interface FileSystemBackend {
     /** Size of [path] in bytes. */
     fun fileSize(conn: NetFsConnection, path: String): Long
 
+    fun exists(conn: NetFsConnection, path: String): Boolean
+
     /** Create/overwrite [path] with [size] bytes from [data]. */
     fun write(conn: NetFsConnection, path: String, data: InputStream, size: Long)
 

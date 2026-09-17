@@ -125,10 +125,20 @@ class SmbBackend : FileSystemBackend {
         return c.share.getFileInformation(fullPath(c, path)).standardInformation.endOfFile
     }
 
+    override fun exists(conn: NetFsConnection, path: String): Boolean {
+        val c = conn as SmbConnection
+        return c.share.fileExists(fullPath(c, path))
+    }
+
     override fun write(conn: NetFsConnection, path: String, data: InputStream, size: Long) {
         val c = conn as SmbConnection
-        val parent = path.substringBeforeLast('/', "")
-        if (parent.isNotEmpty()) runCatching { c.share.mkdir(fullPath(c, parent)) }
+        val segments = path.trim('/').split('/').filter(String::isNotEmpty)
+        var parent = ""
+        segments.dropLast(1).forEach { segment ->
+            parent = if (parent.isEmpty()) segment else "$parent/$segment"
+            val fullParent = fullPath(c, parent)
+            if (!c.share.folderExists(fullParent)) c.share.mkdir(fullParent)
+        }
         val file = c.share.openFile(
             fullPath(c, path),
             EnumSet.of(AccessMask.GENERIC_WRITE),
@@ -137,7 +147,12 @@ class SmbBackend : FileSystemBackend {
             SMB2CreateDisposition.FILE_OVERWRITE_IF,
             null
         )
-        file.use { f -> f.outputStream.use { data.copyTo(it) } }
+        try {
+            file.outputStream.use { data.copyTo(it) }
+        } catch (e: Exception) {
+            runCatching { file.close() }
+            throw e
+        }
     }
 
     override fun delete(conn: NetFsConnection, path: String) {

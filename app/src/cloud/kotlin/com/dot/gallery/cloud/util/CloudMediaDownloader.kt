@@ -1,6 +1,7 @@
 package com.dot.gallery.cloud.util
 
 import android.net.Uri
+import com.dot.gallery.cloud.core.ProviderRegistry
 import com.dot.gallery.cloud.core.ProviderType
 import com.dot.gallery.cloud.core.capabilities.RemoteMediaProvider
 import com.dot.gallery.cloud.image.CloudFetcherRegistryHolder
@@ -8,9 +9,27 @@ import com.dot.gallery.cloud.offline.CloudMediaCache
 import okhttp3.Request
 import java.io.InputStream
 
+internal fun resolveCloudDownloadProvider(
+    registry: ProviderRegistry,
+    providerType: ProviderType,
+    configId: Long,
+    requireExactAccount: Boolean
+): RemoteMediaProvider? {
+    val exactProvider = if (configId > 0L) {
+        registry.getByConfigId(configId)?.takeIf { it.providerType == providerType }
+    } else null
+    return (exactProvider ?: if (requireExactAccount) null else registry.get(providerType))
+        as? RemoteMediaProvider
+}
+
 object CloudMediaDownloader {
 
-    fun downloadCloudMedia(cloudUri: Uri): InputStream? {
+    fun downloadCloudMedia(cloudUri: Uri): InputStream? = download(cloudUri, requireExactAccount = false)
+
+    fun downloadCloudMediaExact(cloudUri: Uri): InputStream? =
+        download(cloudUri, requireExactAccount = true)
+
+    private fun download(cloudUri: Uri, requireExactAccount: Boolean): InputStream? {
         val registry = CloudFetcherRegistryHolder.registry ?: return null
         val providerName = cloudUri.authority ?: return null
         // remoteId may contain slashes (SMB/NFS/WebDAV paths like "Photos/IMG.jpg"); pathSegments
@@ -22,8 +41,12 @@ object CloudMediaDownloader {
             return null
         }
         val configId = cloudUri.getQueryParameter("cfg")?.toLongOrNull() ?: -1L
-        val provider = ((if (configId > 0L) registry.getByConfigId(configId) else null)
-            ?: registry.get(providerType)) as? RemoteMediaProvider ?: return null
+        val provider = resolveCloudDownloadProvider(
+            registry,
+            providerType,
+            configId,
+            requireExactAccount
+        ) ?: return null
         val url = provider.getOriginalUrl(remoteId)
         val authHeaders = provider.getAuthHeaders()
         val requestBuilder = Request.Builder().url(url).get()

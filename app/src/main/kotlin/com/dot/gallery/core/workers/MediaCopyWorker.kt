@@ -13,9 +13,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
-import com.dot.gallery.cloud.core.ProviderType
-import com.dot.gallery.cloud.core.capabilities.RemoteMediaProvider
-import com.dot.gallery.cloud.image.CloudFetcherRegistryHolder
+import com.dot.gallery.cloud.util.CloudMediaDownloader
 import com.dot.gallery.core.Settings
 import com.dot.gallery.core.util.ProgressThrottler
 import com.dot.gallery.core.util.ext.selectedModifiedTimestamp
@@ -38,15 +36,14 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-import okhttp3.Request
 import java.io.IOException
 import java.io.InputStream
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
-fun <T : Media> WorkManager.copyMedia(vararg sets: Pair<T, String>) {
-    if (sets.isEmpty()) return
-    sets.toList().chunked(32).forEachIndexed { index, chunk ->
+fun <T : Media> WorkManager.copyMedia(vararg sets: Pair<T, String>): List<java.util.UUID> {
+    if (sets.isEmpty()) return emptyList()
+    return sets.toList().chunked(32).mapIndexed { index, chunk ->
         val uris = chunk.map { it.first.getUri().toString() }.toTypedArray()
         val paths = chunk.map { it.second }.toTypedArray()
         val mimeTypes = chunk.map { it.first.mimeType }.toTypedArray()
@@ -66,6 +63,7 @@ fun <T : Media> WorkManager.copyMedia(vararg sets: Pair<T, String>) {
             .build()
 
         enqueue(request)
+        request.id
     }
 }
 
@@ -82,6 +80,7 @@ class MediaCopyWorker @AssistedInject constructor(
 ) : CoroutineWorker(appContext, params) {
 
     companion object {
+        const val KEY_TARGET_URI = "target_uri"
         private const val MAX_CONCURRENT_COPIES = 4
     }
 
@@ -116,7 +115,7 @@ class MediaCopyWorker @AssistedInject constructor(
         val copyJobs = uris.zip(paths).mapIndexed { idx, (uriStr, relPath) ->
             async {
                 semaphore.withPermit {
-                    if (!currentCoroutineContext().isActive || isStopped) return@withPermit false
+                    if (!currentCoroutineContext().isActive || isStopped) return@withPermit null
                     val uri = uriStr.toUri()
                     val mime = mimeTypes?.getOrNull(idx)
                     val label = labels?.getOrNull(idx)
@@ -144,14 +143,19 @@ class MediaCopyWorker @AssistedInject constructor(
             MediaStore.Files.getContentUri("external"), null
         )
         when {
-            results.all { it } -> {
+            results.all { it != null } -> {
                 if (isActive) {
                     setProgress(workDataOf("progress" to 100))
                 }
-                Result.success()
+                val output = if (results.size == 1) {
+                    workDataOf(KEY_TARGET_URI to results.single().toString())
+                } else {
+                    androidx.work.Data.EMPTY
+                }
+                Result.success(output)
             }
 
-            results.any { !it } -> Result.failure()
+            results.any { it == null } -> Result.failure()
             else -> Result.failure()
         }
     }
@@ -163,7 +167,7 @@ class MediaCopyWorker @AssistedInject constructor(
         labelHint: String? = null,
         updateModifiedDate: Boolean,
         onBytesCopied: suspend (Int) -> Unit = {}
-    ): Boolean = withContext(Dispatchers.IO) {
+    ): Uri? = withContext(Dispatchers.IO) {
             val cr: ContentResolver = appContext.contentResolver
             var targetUri: Uri? = null
             var committed = false
@@ -173,7 +177,7 @@ class MediaCopyWorker @AssistedInject constructor(
                 val mediaType = if (isCloudUri) {
                     mimeTypeHint ?: "image/jpeg"
                 } else {
-                    cr.getType(src) ?: return@withContext false
+                    cr.getType(src) ?: return@withContext null
                 }
                 val displayName = if (isCloudUri) {
                     labelHint ?: src.pathSegments.firstOrNull()?.take(12) ?: "cloud_media"
@@ -192,7 +196,7 @@ class MediaCopyWorker @AssistedInject constructor(
                         put(MediaStore.MediaColumns.RELATIVE_PATH, relPath)
                         put(MediaStore.MediaColumns.IS_PENDING, 1)
                     }
-                ) ?: return@withContext false
+                ) ?: return@withContext null
                 targetUri = insertedUri
 
                 val inputStream: InputStream = if (isCloudUri) {
@@ -225,9 +229,9 @@ class MediaCopyWorker @AssistedInject constructor(
                     appContext.restoreMediaTimestamp(insertedUri, mediaType, timestamp)
                 }
                 committed = true
-                true
+                insertedUri
             } catch (e: IOException) {
-                false
+                null
             } finally {
                 if (!committed) {
                     targetUri?.let { uri -> runCatching { cr.delete(uri, null, null) } }
@@ -235,28 +239,7 @@ class MediaCopyWorker @AssistedInject constructor(
             }
         }
 
-    private fun openCloudInputStream(cloudUri: Uri): InputStream? {
-        val registry = CloudFetcherRegistryHolder.registry ?: return null
-        val providerName = cloudUri.authority ?: return null
-        // remoteId may contain slashes (SMB/NFS/WebDAV paths like "Photos/IMG.jpg"), so
-        // pathSegments.first() would truncate it to the first folder and request the directory
-        // itself (STATUS_FILE_IS_A_DIRECTORY). Take the whole path instead.
-        val remoteId = cloudUri.path?.trimStart('/')?.takeIf { it.isNotEmpty() } ?: return null
-        val providerType = try { ProviderType.valueOf(providerName) } catch (_: Exception) { return null }
-        val configId = cloudUri.getQueryParameter("cfg")?.toLongOrNull() ?: -1L
-        val provider = ((if (configId > 0L) registry.getByConfigId(configId) else null)
-            ?: registry.get(providerType)) as? RemoteMediaProvider ?: return null
-        val url = provider.getOriginalUrl(remoteId)
-        val authHeaders = provider.getAuthHeaders()
-        val requestBuilder = Request.Builder().url(url).get()
-        authHeaders.forEach { (k, v) -> requestBuilder.addHeader(k, v) }
-        val client = CloudFetcherRegistryHolder.okHttpClient ?: return null
-        val response = client.newCall(requestBuilder.build()).execute()
-        if (!response.isSuccessful) {
-            response.close()
-            return null
-        }
-        return response.body.byteStream()
-    }
+    private fun openCloudInputStream(cloudUri: Uri): InputStream? =
+        CloudMediaDownloader.downloadCloudMediaExact(cloudUri)
 }
 

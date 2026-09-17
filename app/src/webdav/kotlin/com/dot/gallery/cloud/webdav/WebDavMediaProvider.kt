@@ -24,9 +24,14 @@ import com.dot.gallery.cloud.core.SyncState
 import com.dot.gallery.cloud.core.ThumbnailSize
 import com.dot.gallery.cloud.core.auth.CloudConnectionErrorKind
 import com.dot.gallery.cloud.core.auth.CloudConnectionException
+import com.dot.gallery.cloud.core.capabilities.RemoteAlbumCopyResult
+import com.dot.gallery.cloud.core.capabilities.RemoteAlbumCopyState
+import com.dot.gallery.cloud.core.capabilities.RemoteAlbumWriteProvider
 import com.dot.gallery.cloud.core.capabilities.RemoteMediaProvider
+import com.dot.gallery.cloud.core.capabilities.RemoteNameConflictPolicy
 import com.dot.gallery.cloud.core.capabilities.ShareLinkCapableProvider
-import com.dot.gallery.cloud.core.capabilities.SyncCapableProvider
+import com.dot.gallery.cloud.core.capabilities.remoteAlbumFilePath
+import com.dot.gallery.cloud.core.capabilities.remoteCopyFileName
 import com.dot.gallery.cloud.data.dao.CloudMediaDao
 import com.dot.gallery.cloud.data.entity.CloudMediaEntity
 import com.dot.gallery.cloud.webdav.data.api.WebDavClient
@@ -53,6 +58,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.ConcurrentHashMap
@@ -71,7 +77,7 @@ open class WebDavMediaProvider(
     private val dialect: WebDavDialect
 ) : RemoteMediaProvider,
     ShareLinkCapableProvider,
-    SyncCapableProvider,
+    RemoteAlbumWriteProvider,
     Disconnectable {
 
     override val providerType: ProviderType get() = dialect.providerType
@@ -84,6 +90,7 @@ open class WebDavMediaProvider(
     private var session: WebDavSession? = null
     private val webDavClient: WebDavClient? get() = session?.webDavClient
     private val checksumMutex = Mutex()
+    private val copyMutex = Mutex()
     private val remoteChecksumCache = ConcurrentHashMap<String, CachedRemoteChecksum>()
 
     private data class CachedRemoteChecksum(
@@ -98,6 +105,7 @@ open class WebDavMediaProvider(
         add(ProviderCapability.REMOTE_ASSETS)
         add(ProviderCapability.REMOTE_ALBUMS)
         add(ProviderCapability.SYNC)
+        add(ProviderCapability.ALBUM_WRITE)
         if (WebDavFeatureKey.SHARE_LINK in dialect.features) add(ProviderCapability.SHARE_CREATE)
         // Server-side favorites (Nextcloud). ownCloud/generic WebDAV don't expose the flag.
         if (WebDavFeatureKey.FAVORITES in dialect.features) add(ProviderCapability.FAVORITE)
@@ -463,6 +471,123 @@ open class WebDavMediaProvider(
                 Result.failure(e)
             }
         }
+
+    override suspend fun copyToAlbum(
+        media: Media,
+        remoteAlbumId: String,
+        conflictPolicy: RemoteNameConflictPolicy,
+        checksum: String?,
+        continuationRemoteId: String?
+    ): RemoteAlbumCopyResult = withContext(Dispatchers.IO) {
+        copyMutex.withLock {
+            try {
+                val client = webDavClient ?: throw IllegalStateException("Not configured")
+                val initialPath = remoteAlbumFilePath(remoteAlbumId, media.label)
+                if (remoteFileExists(client, initialPath) && checksum != null &&
+                    client.sha1(initialPath).equals(checksum, ignoreCase = true)
+                ) {
+                    return@withLock RemoteAlbumCopyResult(
+                        state = RemoteAlbumCopyState.ALREADY_PRESENT,
+                        remoteId = initialPath
+                    )
+                }
+                var remotePath = initialPath
+                var copyNumber = 1
+                while (remoteFileExists(client, remotePath)) {
+                    remotePath = remoteAlbumFilePath(
+                        remoteAlbumId,
+                        remoteCopyFileName(media.label, copyNumber++)
+                    )
+                }
+                writeCopyAsset(client, media, remotePath, checksum).fold(
+                    onSuccess = {
+                        RemoteAlbumCopyResult(
+                            state = RemoteAlbumCopyState.COPIED,
+                            remoteId = it.remoteId
+                        )
+                    },
+                    onFailure = {
+                        RemoteAlbumCopyResult(
+                            state = RemoteAlbumCopyState.FAILED,
+                            message = it.message ?: "Remote copy failed",
+                            retryable = isRetryableCopyFailure(it)
+                        )
+                    }
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                RemoteAlbumCopyResult(
+                    state = RemoteAlbumCopyState.FAILED,
+                    message = e.message ?: "Remote copy failed",
+                    retryable = isRetryableCopyFailure(e)
+                )
+            }
+        }
+    }
+
+    private suspend fun writeCopyAsset(
+        client: WebDavClient,
+        media: Media,
+        remotePath: String,
+        checksum: String?
+    ): Result<CloudMediaEntity> = try {
+        val configId = currentConfig?.id ?: throw IllegalStateException("Not configured")
+        val input = context.contentResolver.openInputStream(media.getUri())
+            ?: return Result.failure(Exception("Cannot open media file"))
+        val tempFile = File(context.cacheDir, "wd_copy_${System.currentTimeMillis()}_${media.label}")
+        try {
+            input.use { source -> tempFile.outputStream().use { source.copyTo(it) } }
+            client.ensureParentCollections(remotePath)
+            try {
+                client.upload(remotePath, tempFile, media.mimeType, overwrite = false)
+            } catch (e: Exception) {
+                val verified = checksum != null && runCatching {
+                    client.sha1(remotePath).equals(checksum, ignoreCase = true)
+                }.getOrDefault(false)
+                if (!verified) throw e
+            }
+            if (checksum != null && !client.sha1(remotePath).equals(checksum, ignoreCase = true)) {
+                runCatching { client.delete(remotePath) }
+                return Result.failure(Exception("Remote copy verification failed"))
+            }
+            val entity = CloudMediaEntity(
+                remoteId = remotePath,
+                providerType = dialect.providerType,
+                serverConfigId = configId,
+                label = remotePath.substringAfterLast('/'),
+                path = remotePath,
+                relativePath = remotePath.substringBeforeLast('/'),
+                mimeType = media.mimeType,
+                timestamp = System.currentTimeMillis(),
+                size = tempFile.length(),
+                syncState = SyncState.SYNCED,
+                localCopyPath = media.getUri().toString(),
+                contentHash = checksum
+            )
+            cloudMediaDao.insert(entity)
+            Result.success(entity)
+        } finally {
+            tempFile.delete()
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
+    private fun remoteFileExists(client: WebDavClient, remotePath: String): Boolean = try {
+        client.propFind(remotePath, depth = 0).any { !it.isCollection }
+    } catch (e: WebDavException) {
+        if (e.statusCode == 404) false else throw e
+    }
+
+    private fun isRetryableCopyFailure(error: Throwable): Boolean = when (error) {
+        is WebDavException -> error.statusCode == 408 || error.statusCode == 429 ||
+            error.statusCode in 500..599
+        is IOException -> true
+        else -> false
+    }
 
     override suspend fun downloadAsset(remoteId: String): Result<Uri> = withContext(Dispatchers.IO) {
         try {

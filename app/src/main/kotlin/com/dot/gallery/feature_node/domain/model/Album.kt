@@ -9,6 +9,7 @@ import android.os.Parcelable
 import androidx.compose.runtime.Stable
 import androidx.compose.ui.text.intl.Locale
 import androidx.compose.ui.text.toLowerCase
+import com.dot.gallery.cloud.core.CloudAlbumIdentity
 import kotlinx.parcelize.IgnoredOnParcel
 import kotlinx.parcelize.Parcelize
 
@@ -28,6 +29,7 @@ data class Album(
     val mergedAlbumIds: List<Long> = emptyList(),
     val mergeReasons: List<AlbumMergeReason> = emptyList(),
     val storageVolume: String? = null,
+    val cloudIdentity: CloudAlbumIdentity? = null,
 ) : Parcelable {
 
     val sourceAlbumIds: List<Long> get() = mergedAlbumIds.ifEmpty { listOf(id) }

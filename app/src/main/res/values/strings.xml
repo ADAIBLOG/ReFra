@@ -231,6 +231,32 @@
     <string name="album_name">Album Name</string>
     <string name="create_new_album">Create new album</string>
     <string name="copy">Copy</string>
+    <string name="copying_to_album">Copying to %1$s</string>
+    <string name="cloud_move_progress">Moving to %1$s</string>
+    <string name="cloud_move_removing_originals">Removing originals…</string>
+    <string name="cloud_move_incomplete">Move incomplete</string>
+    <string name="cloud_move_mixed_unsupported">Move local and cloud items separately</string>
+    <string name="transfer_on_device">On this device</string>
+    <string name="transfer_unavailable_cloud">Unavailable cloud albums</string>
+    <string name="transfer_copying">Copying</string>
+    <string name="transfer_moving">Moving</string>
+    <string name="transfer_copy_complete">Copy complete</string>
+    <string name="transfer_copy_failed">The copy could not be completed. Your originals are unchanged.</string>
+    <string name="transfer_move_complete">Move complete</string>
+    <string name="transfer_original_retained">Copied; original retained</string>
+    <string name="transfer_complete_summary">%1$d items · %2$s</string>
+    <string name="open_media">Open item</string>
+    <string name="open_album">Open album</string>
+    <string name="done">Done</string>
+    <string name="cloud_copy_incomplete">Copy incomplete</string>
+    <string name="cloud_copy_requires_local">Cloud destinations require local media</string>
+    <string name="cloud_copy_source_unsupported">This source cannot be transferred</string>
+    <string name="cloud_move_unsupported">This selection cannot be safely moved to that album; use Copy instead</string>
+    <string name="cloud_copy_account_unavailable">Cloud account unavailable</string>
+    <string name="cloud_copy_provider_unsupported">This provider does not support album copies</string>
+    <string name="cloud_copy_read_only">Cloud account is read-only</string>
+    <string name="cloud_copy_offline">Connect to copy to this album</string>
+    <string name="retry_failed_items">Retry failed items</string>
     <string name="copy_to_clipboard">Copy to clipboard</string>
     <string name="copied_to_clipboard">Copied to clipboard</string>
     <string name="error_copying_to_clipboard">Failed to copy to clipboard</string>
@@ -1037,6 +1063,10 @@
     <plurals name="item_count">
         <item quantity="one">%s item</item>
         <item quantity="other">%s items</item>
+    </plurals>
+    <plurals name="cloud_copy_failed_count">
+        <item quantity="one">%1$d of %2$d items could not be copied</item>
+        <item quantity="other">%1$d of %2$d items could not be copied</item>
     </plurals>
     <plurals name="album_count">
         <item quantity="one">%d album</item>

@@ -191,6 +191,18 @@ interface CloudMediaDao {
         contentHash: String
     ): Int
 
+    @Query(
+        """
+        UPDATE cloud_media SET localCopyPath = ''
+        WHERE remoteId = :remoteId AND providerType = :providerType AND serverConfigId = :serverConfigId
+        """
+    )
+    suspend fun clearLocalCopyPath(
+        remoteId: String,
+        providerType: ProviderType,
+        serverConfigId: Long
+    ): Int
+
     @Query("""
         SELECT EXISTS(
             SELECT 1 FROM cloud_media

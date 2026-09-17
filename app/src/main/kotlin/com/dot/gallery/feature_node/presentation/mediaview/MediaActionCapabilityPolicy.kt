@@ -81,7 +81,7 @@ object MediaActionCapabilityPolicy {
             },
             hideInVault = mutableLocalSource,
             restoreFromVault = input.isEncrypted && input.vaultRestoreAvailable,
-            copyOrMove = mutableLocalSource,
+            copyOrMove = mutableLocalSource || input.isCloud,
             addToCollection = mutableLocalSource,
             setAlbumCover = mutableLocalSource,
             openExternally = !input.isEncrypted && !input.isCloud,

@@ -555,6 +555,7 @@ private fun capabilityLabelRes(capability: ProviderCapability): Int? = when (cap
     ProviderCapability.REMOTE_ASSETS -> R.string.cloud_cap_remote_assets
     ProviderCapability.REMOTE_ALBUMS -> R.string.cloud_cap_remote_albums
     ProviderCapability.SYNC -> R.string.cloud_cap_sync
+    ProviderCapability.ALBUM_WRITE -> null
     ProviderCapability.SHARE_CREATE -> R.string.cloud_cap_share_link
     ProviderCapability.SHARE_MANAGE -> null
     ProviderCapability.PEOPLE -> R.string.cloud_cap_people

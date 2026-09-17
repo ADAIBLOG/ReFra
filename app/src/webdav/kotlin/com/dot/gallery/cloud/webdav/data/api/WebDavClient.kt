@@ -145,11 +145,17 @@ class WebDavClient(
         }
     }
 
-    fun upload(remotePath: String, file: File, contentType: String = "application/octet-stream") {
+    fun upload(
+        remotePath: String,
+        file: File,
+        contentType: String = "application/octet-stream",
+        overwrite: Boolean = true
+    ) {
         val request = Request.Builder()
             .url(buildUrl(remotePath))
             .put(file.asRequestBody(contentType.toMediaType()))
             .header("Authorization", credentials)
+            .apply { if (!overwrite) header("If-None-Match", "*") }
             .build()
         okHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw WebDavException("Upload", response.code, response.message)

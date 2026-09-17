@@ -22,9 +22,14 @@ import com.dot.gallery.cloud.core.ProviderType
 import com.dot.gallery.cloud.core.SharedLinkInfo
 import com.dot.gallery.cloud.core.SyncState
 import com.dot.gallery.cloud.core.ThumbnailSize
+import com.dot.gallery.cloud.core.capabilities.RemoteAlbumCopyResult
+import com.dot.gallery.cloud.core.capabilities.RemoteAlbumCopyState
+import com.dot.gallery.cloud.core.capabilities.RemoteAlbumWriteProvider
 import com.dot.gallery.cloud.core.capabilities.RemoteMediaProvider
+import com.dot.gallery.cloud.core.capabilities.RemoteNameConflictPolicy
 import com.dot.gallery.cloud.core.capabilities.ShareLinkCapableProvider
-import com.dot.gallery.cloud.core.capabilities.SyncCapableProvider
+import com.dot.gallery.cloud.core.capabilities.remoteAlbumFilePath
+import com.dot.gallery.cloud.core.capabilities.remoteCopyFileName
 import com.dot.gallery.cloud.data.dao.CloudMediaDao
 import com.dot.gallery.cloud.data.entity.CloudMediaEntity
 import com.dot.gallery.cloud.netfs.bridge.NetFsLoopback
@@ -42,6 +47,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
 import java.io.File
@@ -65,7 +72,7 @@ open class NetworkFileSystemProvider(
     private val backend: FileSystemBackend
 ) : RemoteMediaProvider,
     ShareLinkCapableProvider,
-    SyncCapableProvider,
+    RemoteAlbumWriteProvider,
     Disconnectable,
     NetFsLoopbackSource {
 
@@ -86,6 +93,7 @@ open class NetworkFileSystemProvider(
     @Volatile
     private var mediaIndex: NetFsMediaIndex? = null
     private val mediaIndexLock = Any()
+    private val mutationMutex = Mutex()
 
     override val isAvailable: Boolean
         get() = currentConfig != null && _connectionState.value == ConnectionState.CONNECTED
@@ -93,7 +101,8 @@ open class NetworkFileSystemProvider(
     override val capabilities: Set<ProviderCapability> = setOf(
         ProviderCapability.REMOTE_ASSETS,
         ProviderCapability.REMOTE_ALBUMS,
-        ProviderCapability.SYNC
+        ProviderCapability.SYNC,
+        ProviderCapability.ALBUM_WRITE
     )
 
     @Synchronized
@@ -128,6 +137,15 @@ open class NetworkFileSystemProvider(
 
     @Synchronized
     private fun invalidateMediaIndex() {
+        connectionGeneration++
+        mediaIndex = null
+    }
+
+    @Synchronized
+    private fun resetConnection(expected: NetFsConnection) {
+        if (connection !== expected) return
+        runCatching { backend.close(expected) }
+        connection = null
         connectionGeneration++
         mediaIndex = null
     }
@@ -568,37 +586,197 @@ open class NetworkFileSystemProvider(
 
     override suspend fun uploadAsset(localMedia: Media, targetPath: String?): Result<CloudMediaEntity> =
         withContext(Dispatchers.IO) {
-            try {
-                val conn = requireConnection()
-                val configId = currentConfig?.id ?: 0L
-                val fileName = localMedia.label
-                val remotePath = deterministicRemoteId(localMedia, targetPath)
-                val input = context.contentResolver.openInputStream(localMedia.getUri())
-                    ?: return@withContext Result.failure(Exception("Cannot open media file"))
-                val size = runCatching {
-                    context.contentResolver.openAssetFileDescriptor(localMedia.getUri(), "r")?.use { it.length }
-                }.getOrNull() ?: -1L
-                input.use { backend.write(conn, remotePath, it, size) }
-                invalidateMediaIndex()
-                val entity = CloudMediaEntity(
-                    remoteId = remotePath,
-                    providerType = backend.providerType,
-                    serverConfigId = configId,
-                    label = fileName,
-                    path = remotePath,
-                    relativePath = remotePath.substringBeforeLast('/'),
-                    mimeType = localMedia.mimeType,
-                    timestamp = System.currentTimeMillis(),
-                    size = if (size > 0) size else 0L,
-                    syncState = SyncState.SYNCED,
-                    localCopyPath = localMedia.getUri().toString()
-                )
-                cloudMediaDao.insert(entity)
-                Result.success(entity)
-            } catch (e: Exception) {
-                Result.failure(e)
+            mutationMutex.withLock {
+                writeAsset(localMedia, deterministicRemoteId(localMedia, targetPath), null, false)
             }
         }
+
+    override suspend fun uploadAsset(
+        localMedia: Media,
+        targetPath: String?,
+        checksum: String
+    ): Result<CloudMediaEntity> = withContext(Dispatchers.IO) {
+        mutationMutex.withLock {
+            writeAsset(localMedia, deterministicRemoteId(localMedia, targetPath), checksum, false)
+        }
+    }
+
+    override suspend fun copyToAlbum(
+        media: Media,
+        remoteAlbumId: String,
+        conflictPolicy: RemoteNameConflictPolicy,
+        checksum: String?,
+        continuationRemoteId: String?
+    ): RemoteAlbumCopyResult = withContext(Dispatchers.IO) {
+        mutationMutex.withLock {
+            var operationConnection: NetFsConnection? = null
+            try {
+                val conn = requireConnection().also { operationConnection = it }
+                val initialPath = remoteAlbumFilePath(remoteAlbumId, media.label)
+                if (backend.exists(conn, initialPath) && checksum != null &&
+                    remoteHash(conn, initialPath).equals(checksum, ignoreCase = true)
+                ) {
+                    return@withLock RemoteAlbumCopyResult(
+                        state = RemoteAlbumCopyState.ALREADY_PRESENT,
+                        remoteId = initialPath
+                    )
+                }
+                var remotePath = initialPath
+                var copyNumber = 1
+                while (backend.exists(conn, remotePath)) {
+                    remotePath = remoteAlbumFilePath(
+                        remoteAlbumId,
+                        remoteCopyFileName(media.label, copyNumber++)
+                    )
+                }
+                writeAsset(media, remotePath, checksum, true).fold(
+                    onSuccess = {
+                        RemoteAlbumCopyResult(
+                            state = RemoteAlbumCopyState.COPIED,
+                            remoteId = it.remoteId
+                        )
+                    },
+                    onFailure = {
+                        RemoteAlbumCopyResult(
+                            state = RemoteAlbumCopyState.FAILED,
+                            message = copyFailureMessage(it),
+                            retryable = isRetryableCopyFailure(it)
+                        )
+                    }
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (isClosedConnectionFailure(e)) operationConnection?.let { resetConnection(it) }
+                RemoteAlbumCopyResult(
+                    state = RemoteAlbumCopyState.FAILED,
+                    message = copyFailureMessage(e),
+                    retryable = isRetryableCopyFailure(e)
+                )
+            }
+        }
+    }
+
+    private suspend fun writeAsset(
+        localMedia: Media,
+        remotePath: String,
+        checksum: String?,
+        cleanupOnFailure: Boolean,
+        reconnectAttempted: Boolean = false
+    ): Result<CloudMediaEntity> = try {
+        var conn = requireConnection()
+        val configId = currentConfig?.id ?: throw IllegalStateException("Not configured")
+        val input = context.contentResolver.openInputStream(localMedia.getUri())
+            ?: return Result.failure(Exception("Cannot open media file"))
+        val size = runCatching {
+            context.contentResolver.openAssetFileDescriptor(localMedia.getUri(), "r")?.use { it.length }
+        }.getOrNull() ?: -1L
+        try {
+            input.use { backend.write(conn, remotePath, it, size) }
+        } catch (e: Exception) {
+            var verified = remoteContentMatches(conn, remotePath, localMedia, size, checksum)
+            if (!verified && !reconnectAttempted && isClosedConnectionFailure(e)) {
+                resetConnection(conn)
+                conn = requireConnection()
+                verified = remoteContentMatches(conn, remotePath, localMedia, size, checksum)
+                if (!verified) {
+                    return writeAsset(localMedia, remotePath, checksum, cleanupOnFailure, true)
+                }
+            }
+            if (!verified) {
+                if (cleanupOnFailure) runCatching { backend.delete(conn, remotePath) }
+                throw e
+            }
+        }
+        if (checksum != null && !remoteContentMatches(conn, remotePath, localMedia, size, checksum)) {
+            resetConnection(conn)
+            conn = requireConnection()
+            if (!remoteContentMatches(conn, remotePath, localMedia, size, checksum)) {
+                if (cleanupOnFailure) runCatching { backend.delete(conn, remotePath) }
+                return Result.failure(Exception("Remote copy verification failed"))
+            }
+        } else if (checksum == null && size > 0L) {
+            var remoteSize = runCatching { backend.fileSize(conn, remotePath) }.getOrNull()
+            if (remoteSize == null) {
+                resetConnection(conn)
+                conn = requireConnection()
+                remoteSize = runCatching { backend.fileSize(conn, remotePath) }.getOrNull()
+            }
+            if (remoteSize != size) {
+                if (cleanupOnFailure) runCatching { backend.delete(conn, remotePath) }
+                return Result.failure(Exception("Remote copy size verification failed"))
+            }
+        }
+        invalidateMediaIndex()
+        val entity = CloudMediaEntity(
+            remoteId = remotePath,
+            providerType = backend.providerType,
+            serverConfigId = configId,
+            label = remotePath.substringAfterLast('/'),
+            path = remotePath,
+            relativePath = remotePath.substringBeforeLast('/'),
+            mimeType = localMedia.mimeType,
+            timestamp = System.currentTimeMillis(),
+            size = if (size > 0) size else 0L,
+            syncState = SyncState.SYNCED,
+            localCopyPath = localMedia.getUri().toString(),
+            contentHash = checksum
+        )
+        cloudMediaDao.insert(entity)
+        Result.success(entity)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
+    private fun remoteContentMatches(
+        conn: NetFsConnection,
+        remotePath: String,
+        localMedia: Media,
+        expectedSize: Long,
+        checksum: String?
+    ): Boolean = runCatching {
+        if (!backend.exists(conn, remotePath)) return@runCatching false
+        if (expectedSize > 0L && backend.fileSize(conn, remotePath) != expectedSize) {
+            return@runCatching false
+        }
+        val expectedHash = checksum ?: context.contentResolver.openInputStream(localMedia.getUri())
+            ?.use(::contentSha1) ?: return@runCatching false
+        remoteHash(conn, remotePath).equals(expectedHash, ignoreCase = true)
+    }.getOrDefault(false)
+
+    private fun remoteHash(conn: NetFsConnection, remotePath: String): String =
+        backend.openRead(conn, remotePath, 0L).use(::contentSha1)
+
+    private fun isClosedConnectionFailure(error: Throwable): Boolean {
+        val message = error.message.orEmpty().lowercase()
+        return "already been closed" in message || "connection is closed" in message ||
+            "connection closed" in message
+    }
+
+    private fun copyFailureMessage(error: Throwable): String {
+        val message = error.message.orEmpty().lowercase()
+        return if (listOf("permission", "access denied", "nfsstatus:13", "read-only")
+                .any(message::contains)
+        ) "Remote folder is not writable"
+        else error.message ?: "Remote copy failed"
+    }
+
+    private fun isRetryableCopyFailure(error: Throwable): Boolean {
+        val message = error.message.orEmpty().lowercase()
+        if (error is IllegalArgumentException ||
+            error is IllegalStateException && "not configured" in message
+        ) return false
+        return listOf(
+            "permission",
+            "access denied",
+            "authentication",
+            "credential",
+            "nfsstatus:13",
+            "read-only"
+        ).none(message::contains)
+    }
 
     override suspend fun downloadAsset(remoteId: String): Result<Uri> = withContext(Dispatchers.IO) {
         try {

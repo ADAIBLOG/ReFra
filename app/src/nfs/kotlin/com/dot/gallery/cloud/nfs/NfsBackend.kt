@@ -86,15 +86,30 @@ class NfsBackend : FileSystemBackend {
         return runCatching { Nfs3File(c.nfs, nfsPath(path)).length() }.getOrDefault(0L)
     }
 
+    override fun exists(conn: NetFsConnection, path: String): Boolean {
+        val c = conn as NfsConnection
+        return runCatching { Nfs3File(c.nfs, nfsPath(path)).exists() }.getOrDefault(false)
+    }
+
     override fun write(conn: NetFsConnection, path: String, data: InputStream, size: Long) {
         val c = conn as NfsConnection
-        val parent = path.substringBeforeLast('/', "")
-        if (parent.isNotEmpty()) runCatching {
+        val segments = path.trim('/').split('/').filter(String::isNotEmpty)
+        var parent = ""
+        segments.dropLast(1).forEach { segment ->
+            parent = if (parent.isEmpty()) segment else "$parent/$segment"
             val parentFile = Nfs3File(c.nfs, nfsPath(parent))
-            if (!parentFile.exists()) parentFile.mkdir()
+            if (!parentFile.exists()) {
+                parentFile.mkdir()
+                if (!Nfs3File(c.nfs, nfsPath(parent)).exists()) {
+                    throw IllegalStateException("Could not create NFS directory $parent")
+                }
+            }
         }
         val file = Nfs3File(c.nfs, nfsPath(path))
-        NfsFileOutputStream(file).use { data.copyTo(it) }
+        if (!file.exists() && !file.createNewFile()) {
+            throw IllegalStateException("Could not create NFS file $path")
+        }
+        NfsFileOutputStream(Nfs3File(c.nfs, nfsPath(path))).use { data.copyTo(it) }
     }
 
     override fun delete(conn: NetFsConnection, path: String) {

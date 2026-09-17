@@ -12,6 +12,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.dot.gallery.cloud.core.CloudServerConfig
 import com.dot.gallery.cloud.core.ConnectionState
 import com.dot.gallery.cloud.core.ProviderType
+import com.dot.gallery.cloud.core.capabilities.RemoteAlbumCopyState
 import com.dot.gallery.cloud.data.dao.CloudMediaDao
 import com.dot.gallery.cloud.immich.ImmichProvider
 import com.dot.gallery.cloud.immich.data.api.ImmichAuthInterceptor
@@ -277,11 +278,60 @@ class ImmichProviderMockServerTest {
     }
 
     @Test
+    fun copyToAlbumAttachesExistingDuplicateWithoutUploadingAgain() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val source = context.cacheDir.resolve("immich-copy-source.jpg").apply { writeText("duplicate") }
+        val uploadCalled = AtomicBoolean(false)
+        server.dispatcher = dispatcher { req ->
+            when {
+                req.path?.endsWith("/api/assets/bulk-upload-check") == true -> json(
+                    """{ "results": [ { "id": "0", "action": "reject", "assetId": "asset-1", "reason": "duplicate", "isTrashed": false } ] }"""
+                )
+                req.path?.endsWith("/api/albums/album-1/assets") == true -> json("[]")
+                req.path?.endsWith("/api/assets") == true -> {
+                    uploadCalled.set(true)
+                    json("""{ "id": "uploaded-1", "status": "created" }""")
+                }
+                else -> null
+            }
+        }
+        provider.configure(
+            CloudServerConfig(id = 7, providerType = ProviderType.IMMICH, serverUrl = baseUrl(), apiKey = "KEY")
+        )
+        val media = Media.UriMedia(
+            id = 42,
+            label = "source.jpg",
+            uri = source.toUri(),
+            path = source.path,
+            relativePath = "",
+            albumID = 1,
+            albumLabel = "Camera",
+            timestamp = 1_705_315_800,
+            fullDate = "",
+            mimeType = "image/jpeg",
+            favorite = 0,
+            trashed = 0,
+            size = source.length()
+        )
+
+        val result = provider.copyToAlbum(
+            media = media,
+            remoteAlbumId = "album-1",
+            checksum = "000102030405060708090a0b0c0d0e0f10111213"
+        )
+
+        assertEquals(RemoteAlbumCopyState.ALREADY_PRESENT, result.state)
+        assertEquals("asset-1", result.remoteId)
+        assertTrue(!uploadCalled.get())
+        assertTrue(source.delete())
+    }
+
+    @Test
     fun capabilitiesIncludeAllImmichFeatures() {
         val caps = provider.capabilities.map { it.name }.toSet()
         assertNotNull(caps)
         listOf(
-            "REMOTE_ASSETS", "REMOTE_ALBUMS", "SYNC", "PEOPLE", "MAP",
+            "REMOTE_ASSETS", "REMOTE_ALBUMS", "SYNC", "ALBUM_WRITE", "PEOPLE", "MAP",
             "SMART_SEARCH", "SHARE_CREATE", "SHARE_MANAGE", "ARCHIVE", "MEMORIES"
         ).forEach { assertTrue("Immich must declare $it", it in caps) }
     }

@@ -14,6 +14,8 @@ import com.dot.gallery.cloud.core.MemoryInfo
 import com.dot.gallery.cloud.core.PersonInfo
 import com.dot.gallery.cloud.core.ProviderType
 import com.dot.gallery.cloud.core.SharedLinkInfo
+import com.dot.gallery.cloud.core.capabilities.RemoteAlbumCopyResult
+import com.dot.gallery.cloud.core.capabilities.RemoteNameConflictPolicy
 import com.dot.gallery.cloud.data.entity.CloudMediaEntity
 import com.dot.gallery.core.Resource
 import com.dot.gallery.feature_node.domain.model.Media
@@ -71,6 +73,15 @@ interface CloudRepository {
 
     // Sync
     suspend fun uploadAsset(type: ProviderType, localMedia: Media, targetPath: String? = null): Result<CloudMediaEntity>
+    suspend fun copyAssetToAlbum(
+        type: ProviderType,
+        configId: Long,
+        remoteAlbumId: String,
+        localMedia: Media,
+        conflictPolicy: RemoteNameConflictPolicy = RemoteNameConflictPolicy.KEEP_BOTH,
+        checksum: String? = null,
+        continuationRemoteId: String? = null
+    ): RemoteAlbumCopyResult
     suspend fun downloadAsset(type: ProviderType, remoteId: String): Result<android.net.Uri>
     suspend fun getChangedSince(type: ProviderType, timestamp: Long): Result<List<CloudMediaEntity>>
 

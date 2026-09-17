@@ -256,6 +256,7 @@ private fun capabilityLabel(capability: ProviderCapability): Int? = when (capabi
     ProviderCapability.REMOTE_ASSETS -> R.string.setup_cap_remote_assets
     ProviderCapability.REMOTE_ALBUMS -> R.string.setup_cap_remote_albums
     ProviderCapability.SYNC -> R.string.setup_cap_sync
+    ProviderCapability.ALBUM_WRITE -> null
     ProviderCapability.PEOPLE -> R.string.setup_cap_people
     ProviderCapability.MAP -> R.string.setup_cap_map
     ProviderCapability.SMART_SEARCH -> R.string.setup_cap_smart_search

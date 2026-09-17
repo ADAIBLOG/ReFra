@@ -154,23 +154,24 @@ class MediaHandlerImpl @Inject constructor(
         mediaList: List<T>
     ): MediaMutationResult {
         val (cloudMedia, localMedia) = mediaList.partition { it.isCloud }
-        if (cloudMedia.isNotEmpty()) {
-            withContext(Dispatchers.IO) {
-                cloudMedia.forEach { media ->
-                    val (providerName, remoteId, configId) = extractCloudInfo(media) ?: return@forEach
-                    val providerType = try { ProviderType.valueOf(providerName) } catch (_: Exception) { return@forEach }
-                    val provider = getCloudProvider(providerName, configId) ?: return@forEach
-                    if (provider.deleteAsset(remoteId).isSuccess) {
-                        cloudMediaDao.delete(remoteId, providerType, configId)
-                    }
+        val cloudDeleted = withContext(Dispatchers.IO) {
+            cloudMedia.map { media ->
+                val (providerName, remoteId, configId) = extractCloudInfo(media)
+                    ?: return@map false
+                val providerType = runCatching { ProviderType.valueOf(providerName) }.getOrNull()
+                    ?: return@map false
+                val provider = getCloudProvider(providerName, configId) ?: return@map false
+                provider.deleteAsset(remoteId).isSuccess.also { deleted ->
+                    if (deleted) cloudMediaDao.delete(remoteId, providerType, configId)
                 }
-            }
+            }.all { it }
         }
-        return if (localMedia.isNotEmpty()) {
+        val localResult = if (localMedia.isNotEmpty()) {
             repository.deleteMedia(result, localMedia)
         } else {
             MediaMutationResult.COMPLETED
         }
+        return if (cloudDeleted) localResult else MediaMutationResult.FAILED
     }
 
     override suspend fun <T : Media> renameMedia(

@@ -53,7 +53,8 @@ data class CloudAlbum(
             relativePath = "cloud/${providerType.name}",
             timestamp = updatedAt / 1000L,
             count = assetCount.toLong(),
-            size = 0L
+            size = 0L,
+            cloudIdentity = CloudAlbumIdentity(providerType, serverConfigId, remoteId)
         )
     }
 

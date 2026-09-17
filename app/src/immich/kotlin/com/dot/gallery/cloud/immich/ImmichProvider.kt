@@ -27,10 +27,13 @@ import com.dot.gallery.cloud.core.ThumbnailSize
 import com.dot.gallery.cloud.core.capabilities.MapCapableProvider
 import com.dot.gallery.cloud.core.capabilities.MemoriesCapableProvider
 import com.dot.gallery.cloud.core.capabilities.PeopleCapableProvider
+import com.dot.gallery.cloud.core.capabilities.RemoteAlbumCopyResult
+import com.dot.gallery.cloud.core.capabilities.RemoteAlbumCopyState
+import com.dot.gallery.cloud.core.capabilities.RemoteAlbumWriteProvider
 import com.dot.gallery.cloud.core.capabilities.RemoteMediaProvider
+import com.dot.gallery.cloud.core.capabilities.RemoteNameConflictPolicy
 import com.dot.gallery.cloud.core.capabilities.ShareLinkCapableProvider
 import com.dot.gallery.cloud.core.capabilities.SmartSearchCapableProvider
-import com.dot.gallery.cloud.core.capabilities.SyncCapableProvider
 import com.dot.gallery.cloud.data.dao.CloudMediaDao
 import com.dot.gallery.cloud.data.entity.CloudMediaEntity
 import com.dot.gallery.cloud.image.CloudMediaFetcher
@@ -128,7 +131,7 @@ class ImmichProvider @Inject constructor(
     PeopleCapableProvider,
     SmartSearchCapableProvider,
     ShareLinkCapableProvider,
-    SyncCapableProvider,
+    RemoteAlbumWriteProvider,
     MemoriesCapableProvider,
     Disconnectable {
 
@@ -179,6 +182,7 @@ class ImmichProvider @Inject constructor(
         ProviderCapability.REMOTE_ASSETS,
         ProviderCapability.REMOTE_ALBUMS,
         ProviderCapability.SYNC,
+        ProviderCapability.ALBUM_WRITE,
         ProviderCapability.PEOPLE,
         ProviderCapability.MAP,
         ProviderCapability.SMART_SEARCH,
@@ -871,6 +875,82 @@ class ImmichProvider @Inject constructor(
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    override suspend fun copyToAlbum(
+        media: Media,
+        remoteAlbumId: String,
+        conflictPolicy: RemoteNameConflictPolicy,
+        checksum: String?,
+        continuationRemoteId: String?
+    ): RemoteAlbumCopyResult {
+        if (remoteAlbumId.isBlank()) {
+            return RemoteAlbumCopyResult(
+                state = RemoteAlbumCopyState.FAILED,
+                message = "Remote album is unavailable"
+            )
+        }
+        var remoteId = continuationRemoteId
+        var alreadyPresent = false
+        if (remoteId == null && checksum != null) {
+            val presence = bulkUploadCheck(listOf(checksum)).getOrElse {
+                return RemoteAlbumCopyResult(
+                    state = RemoteAlbumCopyState.FAILED,
+                    message = it.message ?: "Duplicate check failed",
+                    retryable = isRetryableImmichCopyFailure(it)
+                )
+            }
+            if (presence["0"] == true) {
+                remoteId = verifiedRemoteId(checksum)
+                alreadyPresent = true
+            }
+        }
+        if (remoteId == null) {
+            val uploaded = if (checksum != null) {
+                uploadAsset(media, null, checksum)
+            } else {
+                uploadAsset(media, null)
+            }.getOrElse {
+                return RemoteAlbumCopyResult(
+                    state = RemoteAlbumCopyState.FAILED,
+                    message = it.message ?: "Upload failed",
+                    retryable = isRetryableImmichCopyFailure(it)
+                )
+            }
+            remoteId = uploaded.remoteId
+        }
+        if (remoteId.isBlank()) {
+            return RemoteAlbumCopyResult(
+                state = RemoteAlbumCopyState.FAILED,
+                message = "Upload returned no asset id"
+            )
+        }
+        return addToAlbum(remoteAlbumId, listOf(remoteId)).fold(
+            onSuccess = {
+                RemoteAlbumCopyResult(
+                    state = if (alreadyPresent) {
+                        RemoteAlbumCopyState.ALREADY_PRESENT
+                    } else {
+                        RemoteAlbumCopyState.COPIED
+                    },
+                    remoteId = remoteId
+                )
+            },
+            onFailure = {
+                RemoteAlbumCopyResult(
+                    state = RemoteAlbumCopyState.ATTACH_PENDING,
+                    remoteId = remoteId,
+                    message = it.message ?: "Could not add asset to album",
+                    retryable = isRetryableImmichCopyFailure(it)
+                )
+            }
+        )
+    }
+
+    private fun isRetryableImmichCopyFailure(error: Throwable): Boolean {
+        val code = Regex("\\b([45]\\d{2})\\b").find(error.message.orEmpty())
+            ?.groupValues?.getOrNull(1)?.toIntOrNull()
+        return code == null || code == 408 || code == 429 || code >= 500
     }
 
     override suspend fun downloadAsset(remoteId: String): Result<Uri> {

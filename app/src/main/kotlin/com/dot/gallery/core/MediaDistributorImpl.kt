@@ -54,6 +54,7 @@ import com.dot.gallery.cloud.core.stableIdHash
 import com.dot.gallery.cloud.data.entity.CloudMediaEntity
 import com.dot.gallery.cloud.data.entity.CloudMediaSnapshotMapper
 import com.dot.gallery.cloud.data.repository.CloudRepository
+import com.dot.gallery.cloud.sync.CloudAlbumCopyWorker
 import com.dot.gallery.cloud.sync.CloudUploadWorker
 import com.dot.gallery.cloud.sync.isActiveBackupWork
 import com.dot.gallery.feature_node.domain.repository.MediaRepository
@@ -463,6 +464,16 @@ class MediaDistributorImpl @Inject constructor(
             var wasRunning = false
             workManager.getWorkInfosByTagFlow(CloudUploadWorker.TAG_BACKUP).collect { infos ->
                 val running = infos.any { isActiveBackupWork(it.state, it.tags) }
+                if (!running && wasRunning && cloudRepository.hasConfiguredProviders) {
+                    refreshCloudData()
+                }
+                wasRunning = running
+            }
+        }
+        appScope.launch {
+            var wasRunning = false
+            workManager.getWorkInfosByTagFlow(CloudAlbumCopyWorker.TAG).collect { infos ->
+                val running = infos.any { !it.state.isFinished }
                 if (!running && wasRunning && cloudRepository.hasConfiguredProviders) {
                     refreshCloudData()
                 }

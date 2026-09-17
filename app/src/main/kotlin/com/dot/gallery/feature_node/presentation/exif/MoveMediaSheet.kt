@@ -9,6 +9,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -26,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -34,8 +36,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -48,13 +53,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.dot.gallery.R
+import com.dot.gallery.cloud.sync.CloudAlbumTransferMode
 import com.dot.gallery.core.Constants
 import com.dot.gallery.core.Constants.albumCellsList
+import com.dot.gallery.core.LocalEventHandler
+import com.dot.gallery.core.LocalMediaDistributor
 import com.dot.gallery.core.LocalMediaHandler
 import com.dot.gallery.core.Settings.Album.rememberAlbumGridSize
+import com.dot.gallery.core.navigate
 import com.dot.gallery.core.presentation.components.DragHandle
 import com.dot.gallery.core.presentation.components.SecurityInfoSheet
 import com.dot.gallery.feature_node.domain.model.Album
@@ -68,6 +81,7 @@ import com.dot.gallery.feature_node.domain.util.resolveMediaStoreVolume
 import com.dot.gallery.feature_node.presentation.albums.components.AlbumComponent
 import com.dot.gallery.feature_node.presentation.albums.components.AlbumGroupComponent
 import com.dot.gallery.feature_node.presentation.util.AppBottomSheetState
+import com.dot.gallery.feature_node.presentation.util.Screen
 import com.dot.gallery.feature_node.presentation.util.launchWriteRequest
 import com.dot.gallery.feature_node.presentation.util.rememberActivityResult
 import com.dot.gallery.feature_node.presentation.util.rememberAppBottomSheetState
@@ -92,7 +106,12 @@ fun <T: Media> MoveMediaSheet(
     onFinish: () -> Unit,
 ) {
     val handler = LocalMediaHandler.current
+    val distributor = LocalMediaDistributor.current
+    val eventHandler = LocalEventHandler.current
     val context = LocalContext.current
+    val transferViewModel = hiltViewModel<CopyMediaViewModel>(key = "MoveMediaSheet")
+    val cloudTransferState by transferViewModel.cloudCopyState.collectAsState()
+    val cloudEnvironment by transferViewModel.cloudEnvironment.collectAsState()
     val hasAllFilesAccess = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
         Environment.isExternalStorageManager()
     } else true
@@ -104,23 +123,66 @@ fun <T: Media> MoveMediaSheet(
     val scope = rememberCoroutineScope()
     var progress by remember(mediaList) { mutableFloatStateOf(0f) }
     var newPath by remember(mediaList) { mutableStateOf("") }
+    var awaitingCloudOriginalDelete by rememberSaveable(mediaList) { mutableStateOf(false) }
+    var cloudCleanupStarted by rememberSaveable(mediaList) { mutableStateOf(false) }
+    var cloudCleanupComplete by rememberSaveable(mediaList) { mutableStateOf(false) }
+    var cloudMoveSourceRetained by rememberSaveable(mediaList) { mutableStateOf(false) }
+    var localMoveCompleted by rememberSaveable(mediaList) { mutableStateOf(false) }
+    var localMoveTargetMediaId by rememberSaveable(mediaList) { mutableStateOf<Long?>(null) }
+    var operationDestination by remember { mutableStateOf<Album?>(null) }
+    val hasMixedSources = mediaList.any { it.isCloud } && mediaList.any { !it.isCloud }
+    val moveSourceStatus = transferViewModel.cloudMoveSourceStatus(mediaList, cloudEnvironment)
+    val operationActive = progress > 0f || cloudTransferState.active || awaitingCloudOriginalDelete
+    val cloudTransferFailed = cloudTransferState.finished && !cloudTransferState.succeeded
+    val cloudMoveSucceeded = cloudTransferState.finished && cloudTransferState.succeeded &&
+        (mediaList.none { !it.isCloud } || cloudCleanupComplete)
+    val moveSucceeded = cloudMoveSucceeded || localMoveCompleted
+    val selectionVisible = !operationActive && !cloudTransferFailed && !moveSucceeded
+    val completedDestination = cloudTransferState.destinationAlbumId?.let { id ->
+        albumState.value.albums.firstOrNull { it.id == id }
+    } ?: operationDestination
+    val completionDestinationLabel = cloudTransferState.destinationLabel
+        .ifBlank { completedDestination?.label.orEmpty() }
+    val openTarget = resolveTransferOpenTarget(
+        itemCount = if (cloudTransferState.finished) cloudTransferState.total else mediaList.size,
+        targetMediaId = if (cloudTransferState.finished) {
+            cloudTransferState.targetMediaId
+        } else {
+            localMoveTargetMediaId
+        },
+        destinationAlbumId = cloudTransferState.destinationAlbumId ?: completedDestination?.id,
+        destinationLabel = completionDestinationLabel
+    )
+    val operationProgress = when {
+        cloudTransferState.active -> cloudTransferState.progress
+        awaitingCloudOriginalDelete -> 1f
+        else -> progress
+    }
 
     val newAlbumSheetState = rememberAppBottomSheetState()
     val securitySheetState = rememberAppBottomSheetState()
-    var pendingLockedAlbumPath by remember { mutableStateOf<String?>(null) }
+    var pendingLockedAlbum by remember { mutableStateOf<Album?>(null) }
     var searchQuery by remember { mutableStateOf("") }
     val sources = mediaList.filter { !it.isCloud }.map {
         AlbumDestinationSource(it.mediaStoreVolumeName, it.relativePath)
     }
 
-    fun Album.isMoveDestinationEnabled(): Boolean = absolutePath.isNotBlank() &&
-        isAlbumMoveDestinationEnabled(
+    fun Album.isMoveDestinationEnabled(): Boolean {
+        if (moveSourceStatus != CloudCopyDestinationStatus.READY) return false
+        val cloudStatus = transferViewModel.cloudMoveDestinationStatus(
+            this,
+            mediaList,
+            cloudEnvironment
+        )
+        if (cloudStatus != null) return cloudStatus == CloudCopyDestinationStatus.READY
+        return absolutePath.isNotBlank() && isAlbumMoveDestinationEnabled(
             hasFullMediaAccess = hasFullMediaAccess,
             albumVolume = volume,
             albumRelativePath = relativePath,
             sources = sources,
-            isCloudAlbum = uri.scheme == "cloud" || relativePath.startsWith("cloud/"),
+            isCloudAlbum = false,
         )
+    }
 
     fun localMediaForDestination(path: String): List<T> {
         val (destinationVolume, destinationRelativePath) = resolveMediaStoreVolume(path)
@@ -144,7 +206,7 @@ fun <T: Media> MoveMediaSheet(
                             arrayOf(it.mimeType),
                             null
                         )
-                        progress = index.toFloat() / mediaList.size
+                        progress = (index + 1).toFloat() / mediaList.size
                     } else {
                         return@async false
                     }
@@ -155,8 +217,14 @@ fun <T: Media> MoveMediaSheet(
                 context.contentResolver.notifyChange(
                     MediaStore.Files.getContentUri("external"), null
                 )
-                sheetState.hide()
-                onFinish()
+                progress = 0f
+                localMoveTargetMediaId = mediaList.singleOrNull()?.id
+                if (operationDestination != null) {
+                    localMoveCompleted = true
+                } else {
+                    sheetState.hide()
+                    onFinish()
+                }
             } else {
                 toastError.show()
                 delay(1000)
@@ -175,9 +243,17 @@ fun <T: Media> MoveMediaSheet(
             context.contentResolver.notifyChange(
                 MediaStore.Files.getContentUri("external"), null
             )
+            localMoveTargetMediaId = pendingCopyUris.singleOrNull()
+                ?.let(Uri::parse)?.lastPathSegment?.toLongOrNull()
+                ?: mediaList.singleOrNull()?.id
             pendingCopyUris = emptyList()
-            sheetState.hide()
-            onFinish()
+            progress = 0f
+            if (operationDestination != null) {
+                localMoveCompleted = true
+            } else {
+                sheetState.hide()
+                onFinish()
+            }
         }
     }
 
@@ -193,6 +269,18 @@ fun <T: Media> MoveMediaSheet(
             }
         },
         onResultOk = finishMove
+    )
+
+    val cloudOriginalDeleteRequest = rememberActivityResult(
+        onResultCanceled = {
+            awaitingCloudOriginalDelete = false
+            cloudMoveSourceRetained = true
+            cloudCleanupComplete = true
+        },
+        onResultOk = {
+            awaitingCloudOriginalDelete = false
+            cloudCleanupComplete = true
+        }
     )
 
     /**
@@ -256,16 +344,75 @@ fun <T: Media> MoveMediaSheet(
         }
     }
 
-    fun startMove(albumPath: String) {
+    fun startCloudToLocalMove(albumPath: String, cloudMedia: List<T>) {
+        if (restrictedMoveJob?.isActive == true) return
+        progress = 0.001f
+        restrictedMoveJob = scope.launch {
+            var copies = emptyList<Uri>()
+            var sourceMutationStarted = false
+            try {
+                copies = handler.copyMediaForMove(cloudMedia, albumPath) { copyProgress ->
+                    withContext(Dispatchers.Main) { progress = copyProgress }
+                }
+                if (copies.isEmpty()) {
+                    progress = 0f
+                    toastError.show()
+                    delay(1000)
+                    sheetState.hide()
+                    return@launch
+                }
+                pendingCopyUris = copies.map(Uri::toString)
+                sourceMutationStarted = true
+                when (handler.deleteMedia(deleteRequest, cloudMedia)) {
+                    MediaMutationResult.COMPLETED -> {
+                        scope.launch { distributor.invalidate() }
+                        finishMove()
+                    }
+                    MediaMutationResult.REQUEST_LAUNCHED -> {
+                        pendingCopyUris = copies.map(Uri::toString)
+                    }
+                    MediaMutationResult.FAILED -> {
+                        scope.launch { distributor.invalidate() }
+                        progress = 0f
+                        cloudMoveSourceRetained = true
+                        localMoveTargetMediaId = copies.singleOrNull()
+                            ?.lastPathSegment?.toLongOrNull()
+                        localMoveCompleted = true
+                    }
+                }
+            } catch (e: CancellationException) {
+                if (!sourceMutationStarted && copies.isNotEmpty()) {
+                    withContext(NonCancellable) { handler.discardMediaCopies(copies) }
+                }
+                throw e
+            } catch (e: Exception) {
+                progress = 0f
+                if (sourceMutationStarted) {
+                    cloudMoveSourceRetained = true
+                    localMoveTargetMediaId = copies.singleOrNull()
+                        ?.lastPathSegment?.toLongOrNull()
+                    localMoveCompleted = true
+                } else {
+                    withContext(NonCancellable) { handler.discardMediaCopies(copies) }
+                    toastError.show()
+                    delay(1000)
+                    sheetState.hide()
+                }
+            } finally {
+                restrictedMoveJob = null
+            }
+        }
+    }
+
+    fun startLocalMove(albumPath: String) {
         val cloudMedia = mediaList.filter { it.isCloud }
+        if (cloudMedia.isNotEmpty()) {
+            startCloudToLocalMove(albumPath, cloudMedia)
+            return
+        }
         val localMedia = localMediaForDestination(albumPath)
         val isRestrictedMove = restrictedMoveSources(hasFullMediaAccess, localMedia).isNotEmpty()
         if (isRestrictedMove && restrictedMoveJob?.isActive == true) return
-        // For cloud media: copy to local destination (download + insert into MediaStore)
-        if (cloudMedia.isNotEmpty()) {
-            scope.launch { handler.copyMedia(*cloudMedia.map { it to albumPath }.toTypedArray()) }
-        }
-        // For local media: use the standard write-request move flow
         if (localMedia.isNotEmpty()) {
             if (isRestrictedMove) {
                 startRestrictedMove(albumPath, localMedia)
@@ -279,10 +426,74 @@ fun <T: Media> MoveMediaSheet(
                 }
             }
         } else {
-            // All cloud — just finish after enqueue
             scope.launch {
                 sheetState.hide()
                 onFinish()
+            }
+        }
+    }
+
+    fun startMove(album: Album) {
+        operationDestination = album
+        if (album.cloudIdentity != null) {
+            transferViewModel.enqueueCloudCopy(mediaList, album, CloudAlbumTransferMode.MOVE)
+        } else {
+            startLocalMove(album.absolutePath)
+        }
+    }
+
+    fun finishCloudMove(route: String? = null) {
+        scope.launch {
+            sheetState.hide()
+            transferViewModel.clearCloudCopyResult()
+            localMoveCompleted = false
+            cloudCleanupStarted = false
+            cloudCleanupComplete = false
+            cloudMoveSourceRetained = false
+            operationDestination = null
+            onFinish()
+            if (route != null) eventHandler.navigate(route)
+        }
+    }
+
+    fun openCloudMoveCompletion() {
+        val target = openTarget ?: return
+        val route = when (target.type) {
+            TransferOpenTargetType.MEDIA -> Screen.MediaViewScreen.idAndAlbum(
+                requireNotNull(target.mediaId),
+                target.albumId
+            )
+            TransferOpenTargetType.ALBUM -> Screen.AlbumViewScreen.album(
+                target.albumId,
+                target.albumLabel
+            )
+        }
+        finishCloudMove(route)
+    }
+
+    LaunchedEffect(
+        cloudTransferState.workId,
+        cloudTransferState.finished,
+        cloudTransferState.succeeded,
+        cloudCleanupStarted
+    ) {
+        if (!cloudTransferState.finished || !cloudTransferState.succeeded || cloudCleanupStarted) {
+            return@LaunchedEffect
+        }
+        val localSources = mediaList.filter { !it.isCloud }
+        if (localSources.isEmpty()) return@LaunchedEffect
+        cloudCleanupStarted = true
+        awaitingCloudOriginalDelete = true
+        when (handler.deleteMedia(cloudOriginalDeleteRequest, localSources)) {
+            MediaMutationResult.REQUEST_LAUNCHED -> Unit
+            MediaMutationResult.COMPLETED -> {
+                awaitingCloudOriginalDelete = false
+                cloudCleanupComplete = true
+            }
+            MediaMutationResult.FAILED -> {
+                awaitingCloudOriginalDelete = false
+                cloudMoveSourceRetained = true
+                cloudCleanupComplete = true
             }
         }
     }
@@ -291,13 +502,11 @@ fun <T: Media> MoveMediaSheet(
         title = stringResource(R.string.biometric_authentication),
         subtitle = stringResource(R.string.unlock_album_biometric_subtitle),
         onSuccess = {
-            pendingLockedAlbumPath?.let { path ->
-                startMove(path)
-            }
-            pendingLockedAlbumPath = null
+            pendingLockedAlbum?.let(::startMove)
+            pendingLockedAlbum = null
         },
         onFailed = {
-            pendingLockedAlbumPath = null
+            pendingLockedAlbum = null
         }
     )
 
@@ -305,9 +514,14 @@ fun <T: Media> MoveMediaSheet(
         ModalBottomSheet(
             sheetState = sheetState.sheetState,
             onDismissRequest = {
-                restrictedMoveJob?.cancel()
-                scope.launch {
-                    sheetState.hide()
+                if (!operationActive) {
+                    if (moveSucceeded) {
+                        finishCloudMove()
+                    } else {
+                        restrictedMoveJob?.cancel()
+                        transferViewModel.clearCloudCopyResult()
+                        scope.launch { sheetState.hide() }
+                    }
                 }
             },
             dragHandle = { DragHandle() }
@@ -331,7 +545,7 @@ fun <T: Media> MoveMediaSheet(
                 )
 
                 AnimatedVisibility(
-                    visible = progress == 0f,
+                    visible = selectionVisible,
                     enter = Constants.Animation.enterAnimation,
                     exit = Constants.Animation.exitAnimation
                 ) {
@@ -364,27 +578,127 @@ fun <T: Media> MoveMediaSheet(
                 }
 
                 AnimatedVisibility(
-                    visible = progress > 0f,
+                    visible = selectionVisible && moveSourceStatus != CloudCopyDestinationStatus.READY,
+                    enter = Constants.Animation.enterAnimation,
+                    exit = Constants.Animation.exitAnimation
+                ) {
+                    Text(
+                        text = if (hasMixedSources) {
+                            stringResource(R.string.cloud_move_mixed_unsupported)
+                        } else {
+                            stringResource(moveSourceStatus.cloudDestinationMessageRes())
+                        },
+                        modifier = Modifier.padding(horizontal = 24.dp),
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                AnimatedVisibility(
+                    visible = operationActive,
                     modifier = Modifier
                         .padding(32.dp)
                         .padding(bottom = 64.dp)
                         .navigationBarsPadding()
-                        .size(128.dp)
                         .align(Alignment.CenterHorizontally),
                     enter = Constants.Animation.enterAnimation,
                     exit = Constants.Animation.exitAnimation
                 ) {
-                    CircularProgressIndicator(
-                        progress = {
-                            progress
-                        },
-                        modifier = Modifier.fillMaxSize(),
+                    if (completedDestination != null) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            TransferJourneyPreview(
+                                media = mediaList,
+                                destination = completedDestination,
+                                destinationLabel = completionDestinationLabel,
+                                mode = CloudAlbumTransferMode.MOVE,
+                                progress = operationProgress
+                            )
+                            if (awaitingCloudOriginalDelete) {
+                                Text(
+                                    text = stringResource(R.string.cloud_move_removing_originals),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    } else {
+                        CircularProgressIndicator(
+                            progress = { operationProgress },
+                            modifier = Modifier.size(128.dp),
+                        )
+                    }
+                }
+
+                AnimatedVisibility(
+                    visible = moveSucceeded,
+                    enter = Constants.Animation.enterAnimation,
+                    exit = Constants.Animation.exitAnimation
+                ) {
+                    TransferCompletionPanel(
+                        media = mediaList,
+                        destination = completedDestination,
+                        destinationLabel = completionDestinationLabel,
+                        mode = CloudAlbumTransferMode.MOVE,
+                        sourceRetained = cloudMoveSourceRetained,
+                        openLabel = stringResource(
+                            if (openTarget?.type == TransferOpenTargetType.MEDIA) {
+                                R.string.open_media
+                            } else {
+                                R.string.open_album
+                            }
+                        ),
+                        onOpen = openTarget?.let { { openCloudMoveCompletion() } },
+                        onDone = { finishCloudMove() }
                     )
+                }
+
+                AnimatedVisibility(
+                    visible = cloudTransferFailed,
+                    enter = Constants.Animation.enterAnimation,
+                    exit = Constants.Animation.exitAnimation
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.cloud_move_incomplete),
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            text = cloudTransferState.message.ifBlank {
+                                stringResource(R.string.cloud_copy_source_unsupported)
+                            },
+                            textAlign = TextAlign.Center,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (cloudTransferState.canRetry) {
+                                Button(onClick = transferViewModel::retryCloudCopy) {
+                                    Text(stringResource(R.string.retry_failed_items))
+                                }
+                            }
+                            TextButton(
+                                onClick = {
+                                    transferViewModel.clearCloudCopyResult()
+                                    scope.launch { sheetState.hide() }
+                                }
+                            ) {
+                                Text(stringResource(R.string.close))
+                            }
+                        }
+                    }
                 }
 
                 val albumSize by rememberAlbumGridSize()
                 AnimatedVisibility(
-                    visible = progress == 0f,
+                    visible = selectionVisible,
                     enter = Constants.Animation.enterAnimation,
                     exit = Constants.Animation.exitAnimation
                 ) {
@@ -420,6 +734,21 @@ fun <T: Media> MoveMediaSheet(
                         if (query.isEmpty()) albums
                         else albums.filter { it.label.contains(query, ignoreCase = true) }
                     }
+                    val localSectionTitle = stringResource(R.string.transfer_on_device)
+                    val unavailableSectionTitle = stringResource(R.string.transfer_unavailable_cloud)
+                    val destinationSections = remember(
+                        filteredUngroupedAlbums,
+                        cloudEnvironment.accountsByConfigId,
+                        localSectionTitle,
+                        unavailableSectionTitle
+                    ) {
+                        buildTransferDestinationSections(
+                            albums = filteredUngroupedAlbums,
+                            accounts = cloudEnvironment.accountsByConfigId,
+                            localTitle = localSectionTitle,
+                            unavailableTitle = unavailableSectionTitle
+                        )
+                    }
 
                     LazyVerticalGrid(
                         state = rememberLazyGridState(),
@@ -451,20 +780,40 @@ fun <T: Media> MoveMediaSheet(
                                 items = filteredGroupAlbums,
                                 key = { item -> "group_album_${item.id}" }
                             ) { item ->
+                                val cloudStatus = transferViewModel.cloudMoveDestinationStatus(
+                                    item,
+                                    mediaList,
+                                    cloudEnvironment
+                                )
+                                val isEnabled = item.isMoveDestinationEnabled()
+                                val disabledDescription = when {
+                                    moveSourceStatus != CloudCopyDestinationStatus.READY ->
+                                        stringResource(moveSourceStatus.cloudDestinationMessageRes())
+                                    cloudStatus != null && cloudStatus != CloudCopyDestinationStatus.READY ->
+                                        stringResource(cloudStatus.cloudDestinationMessageRes())
+                                    else -> null
+                                }
                                 AlbumComponent(
-                                    modifier = Modifier.animateItem(),
+                                    modifier = Modifier
+                                        .animateItem()
+                                        .semantics {
+                                            if (!isEnabled && disabledDescription != null) {
+                                                disabled()
+                                                stateDescription = disabledDescription
+                                            }
+                                        },
                                     album = item,
-                                    isEnabled = item.isMoveDestinationEnabled(),
+                                    isEnabled = isEnabled,
                                     onItemClick = { album ->
                                         if (album.isLocked) {
                                             if (!biometricState.isSupported) {
                                                 scope.launch { securitySheetState.show() }
                                             } else {
-                                                pendingLockedAlbumPath = album.absolutePath
+                                                pendingLockedAlbum = album
                                                 biometricState.authenticate()
                                             }
                                         } else {
-                                            startMove(album.absolutePath)
+                                            startMove(album)
                                         }
                                     }
                                 )
@@ -475,7 +824,7 @@ fun <T: Media> MoveMediaSheet(
                                 item {
                                     AlbumComponent(
                                         album = Album.NewAlbum,
-                                        isEnabled = true,
+                                        isEnabled = moveSourceStatus == CloudCopyDestinationStatus.READY,
                                         onItemClick = {
                                             scope.launch(Dispatchers.Main) {
                                                 newAlbumSheetState.show()
@@ -496,26 +845,53 @@ fun <T: Media> MoveMediaSheet(
                                 )
                             }
 
-                            items(
-                                items = filteredUngroupedAlbums,
-                                key = { item -> item.toString() }
-                            ) { item ->
-                                AlbumComponent(
-                                    album = item,
-                                    isEnabled = item.isMoveDestinationEnabled(),
-                                    onItemClick = { album ->
-                                        if (album.isLocked) {
-                                            if (!biometricState.isSupported) {
-                                                scope.launch { securitySheetState.show() }
-                                            } else {
-                                                pendingLockedAlbumPath = album.absolutePath
-                                                biometricState.authenticate()
-                                            }
-                                        } else {
-                                            startMove(album.absolutePath)
-                                        }
+                            destinationSections.forEach { section ->
+                                item(
+                                    span = { GridItemSpan(maxLineSpan) },
+                                    key = "destination_header_${section.key}"
+                                ) {
+                                    TransferDestinationSectionHeader(section)
+                                }
+                                items(
+                                    items = section.albums,
+                                    key = { item -> "${section.key}_${item.id}" }
+                                ) { item ->
+                                    val cloudStatus = transferViewModel.cloudMoveDestinationStatus(
+                                        item,
+                                        mediaList,
+                                        cloudEnvironment
+                                    )
+                                    val isEnabled = item.isMoveDestinationEnabled()
+                                    val disabledDescription = when {
+                                        moveSourceStatus != CloudCopyDestinationStatus.READY ->
+                                            stringResource(moveSourceStatus.cloudDestinationMessageRes())
+                                        cloudStatus != null && cloudStatus != CloudCopyDestinationStatus.READY ->
+                                            stringResource(cloudStatus.cloudDestinationMessageRes())
+                                        else -> null
                                     }
-                                )
+                                    AlbumComponent(
+                                        modifier = Modifier.semantics {
+                                            if (!isEnabled && disabledDescription != null) {
+                                                disabled()
+                                                stateDescription = disabledDescription
+                                            }
+                                        },
+                                        album = item,
+                                        isEnabled = isEnabled,
+                                        onItemClick = { album ->
+                                            if (album.isLocked) {
+                                                if (!biometricState.isSupported) {
+                                                    scope.launch { securitySheetState.show() }
+                                                } else {
+                                                    pendingLockedAlbum = album
+                                                    biometricState.authenticate()
+                                                }
+                                            } else {
+                                                startMove(album)
+                                            }
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
@@ -531,7 +907,7 @@ fun <T: Media> MoveMediaSheet(
         onFinish = { newAlbum ->
             // Same routing as an existing album so restricted sources reach the copy +
             // delete-request path here too.
-            startMove(resolveNewAlbumMovePath(newAlbum, hasAllFilesAccess))
+            startLocalMove(resolveNewAlbumMovePath(newAlbum, hasAllFilesAccess))
         },
         onCancel = {
             if (newAlbumSheetState.isVisible) {

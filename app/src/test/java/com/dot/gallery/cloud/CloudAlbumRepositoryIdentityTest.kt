@@ -15,11 +15,18 @@ import com.dot.gallery.cloud.core.ProviderCapability
 import com.dot.gallery.cloud.core.ProviderRegistry
 import com.dot.gallery.cloud.core.ProviderType
 import com.dot.gallery.cloud.core.ThumbnailSize
+import com.dot.gallery.cloud.core.capabilities.RemoteAlbumCopyResult
+import com.dot.gallery.cloud.core.capabilities.RemoteAlbumCopyState
+import com.dot.gallery.cloud.core.capabilities.RemoteAlbumWriteProvider
 import com.dot.gallery.cloud.core.capabilities.RemoteMediaProvider
+import com.dot.gallery.cloud.core.capabilities.RemoteNameConflictPolicy
 import com.dot.gallery.cloud.data.entity.CloudMediaEntity
+import com.dot.gallery.cloud.data.repository.copyRemoteAlbumForAccount
 import com.dot.gallery.cloud.data.repository.getRemoteAlbumMediaForAccount
 import com.dot.gallery.cloud.data.repository.resolveProviderAccount
+import com.dot.gallery.cloud.util.resolveCloudDownloadProvider
 import com.dot.gallery.core.Resource
+import com.dot.gallery.feature_node.domain.model.Media
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -52,6 +59,41 @@ class CloudAlbumRepositoryIdentityTest {
     }
 
     @Test
+    fun explicitTransferDownloadNeverFallsBackToAnotherSameTypeAccount() {
+        val registry = ProviderRegistry()
+        val first = AlbumProvider(configId = 101L)
+        val second = AlbumProvider(configId = 202L)
+        registry._providers[101L] = first
+        registry._providers[202L] = second
+
+        assertTrue(
+            resolveCloudDownloadProvider(
+                registry,
+                ProviderType.IMMICH,
+                202L,
+                requireExactAccount = true
+            ) === second
+        )
+        assertEquals(
+            null,
+            resolveCloudDownloadProvider(
+                registry,
+                ProviderType.IMMICH,
+                303L,
+                requireExactAccount = true
+            )
+        )
+        assertTrue(
+            resolveCloudDownloadProvider(
+                registry,
+                ProviderType.IMMICH,
+                303L,
+                requireExactAccount = false
+            ) === first
+        )
+    }
+
+    @Test
     fun sameProviderAccountsResolveAlbumThroughRequestedConfigId() = runBlocking {
         val registry = ProviderRegistry()
         val first = AlbumProvider(configId = 101L)
@@ -72,14 +114,60 @@ class CloudAlbumRepositoryIdentityTest {
         assertEquals(listOf("shared-album"), second.requestedAlbums)
     }
 
-    private class AlbumProvider(private val configId: Long) : RemoteMediaProvider {
+    @Test
+    fun sameProviderAccountsCopyIntoRequestedAccountAndAlbum() = runBlocking {
+        val registry = ProviderRegistry()
+        val first = AlbumProvider(configId = 101L)
+        val second = AlbumProvider(configId = 202L)
+        registry._providers[101L] = first
+        registry._providers[202L] = second
+        val media = Media.EncryptedMedia(
+            id = 1L,
+            label = "photo.jpg",
+            bytes = byteArrayOf(1),
+            path = "",
+            relativePath = "Pictures",
+            albumID = 1L,
+            albumLabel = "Pictures",
+            timestamp = 1L,
+            fullDate = "",
+            mimeType = "image/jpeg",
+            favorite = 0,
+            trashed = 0,
+            size = 1L
+        )
+
+        val result = copyRemoteAlbumForAccount(
+            registry = registry,
+            type = ProviderType.IMMICH,
+            configId = 202L,
+            remoteAlbumId = "shared-album",
+            localMedia = media,
+            conflictPolicy = RemoteNameConflictPolicy.KEEP_BOTH,
+            checksum = "hash",
+            continuationRemoteId = null
+        )
+
+        assertEquals(RemoteAlbumCopyState.COPIED, result.state)
+        assertEquals(emptyList<String>(), first.copyRequests)
+        assertEquals(listOf("shared-album"), second.copyRequests)
+    }
+
+    private class AlbumProvider(private val configId: Long) :
+        RemoteMediaProvider,
+        RemoteAlbumWriteProvider {
         val requestedAlbums = mutableListOf<String>()
         val archiveRequests = mutableListOf<String>()
+        val copyRequests = mutableListOf<String>()
 
         override val providerType = ProviderType.IMMICH
         override val displayName = "Immich $configId"
         override val isAvailable = true
-        override val capabilities = setOf(ProviderCapability.REMOTE_ALBUMS)
+        override val capabilities = setOf(
+            ProviderCapability.REMOTE_ALBUMS,
+            ProviderCapability.SYNC,
+            ProviderCapability.ALBUM_WRITE
+        )
         override val connectionState = MutableStateFlow(ConnectionState.CONNECTED)
 
         override fun getRemoteAlbumMedia(albumId: String): Flow<Resource<List<CloudMediaEntity>>> {
@@ -128,6 +216,33 @@ class CloudAlbumRepositoryIdentityTest {
         override fun getOriginalUrl(remoteId: String) = ""
         override fun getAuthHeaders() = emptyMap<String, String>()
         override fun configure(config: CloudServerConfig) = Unit
+        override suspend fun uploadAsset(localMedia: Media, targetPath: String?) =
+            Result.success(
+                CloudMediaEntity(
+                    remoteId = "uploaded-$configId",
+                    providerType = providerType,
+                    serverConfigId = configId
+                )
+            )
+        override suspend fun downloadAsset(remoteId: String) =
+            Result.failure<android.net.Uri>(UnsupportedOperationException())
+        override suspend fun getChangedSince(timestamp: Long) =
+            Result.success(emptyList<CloudMediaEntity>())
+        override suspend fun bulkUploadCheck(hashes: List<String>) =
+            Result.success(emptyMap<String, Boolean>())
+        override suspend fun copyToAlbum(
+            media: Media,
+            remoteAlbumId: String,
+            conflictPolicy: RemoteNameConflictPolicy,
+            checksum: String?,
+            continuationRemoteId: String?
+        ): RemoteAlbumCopyResult {
+            copyRequests += remoteAlbumId
+            return RemoteAlbumCopyResult(
+                state = RemoteAlbumCopyState.COPIED,
+                remoteId = "uploaded-$configId"
+            )
+        }
 
         private fun emptyMedia(): Flow<Resource<List<CloudMediaEntity>>> =
             flowOf(Resource.Success(emptyList()))

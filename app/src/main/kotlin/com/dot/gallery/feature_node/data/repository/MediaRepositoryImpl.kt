@@ -28,6 +28,7 @@ import androidx.room.withTransaction
 import androidx.work.WorkManager
 import com.dot.gallery.cloud.data.entity.CloudMediaEntity
 import com.dot.gallery.cloud.data.entity.CloudServerConfigEntity
+import com.dot.gallery.cloud.util.CloudMediaDownloader
 import com.dot.gallery.core.Constants
 import com.dot.gallery.core.presentation.components.util.hasMediaAccess
 import com.dot.gallery.core.startup.StartupMediaCache
@@ -763,10 +764,11 @@ class MediaRepositoryImpl(
         var committed = false
         try {
             val srcUri = media.getUri()
-            val mediaType = cr.getType(srcUri) ?: return@withContext null
+            val mediaType = if (media.isCloud) media.mimeType else cr.getType(srcUri)
+                ?: return@withContext null
             val isVideo = mediaType.startsWith("video")
-            val sourceDateModified = cr.mediaDateModified(srcUri)
-            val sourceSize = cr.mediaSize(srcUri)
+            val sourceDateModified = if (media.isCloud) media.timestamp else cr.mediaDateModified(srcUri)
+            val sourceSize = if (media.isCloud) media.size else cr.mediaSize(srcUri)
 
             val insertedUri = cr.insert(
                 if (isVideo) MediaStore.Video.Media.getContentUri(destVolume)
@@ -780,7 +782,12 @@ class MediaRepositoryImpl(
             ) ?: return@withContext null
             targetUri = insertedUri
 
-            val copiedBytes = cr.openInputStream(srcUri)?.use { input ->
+            val sourceInput = if (media.isCloud) {
+                CloudMediaDownloader.downloadCloudMediaExact(srcUri)
+            } else {
+                cr.openInputStream(srcUri)
+            }
+            val copiedBytes = sourceInput?.use { input ->
                 cr.openOutputStream(insertedUri)?.use { output ->
                     input.copyToCancellable(output)
                 }

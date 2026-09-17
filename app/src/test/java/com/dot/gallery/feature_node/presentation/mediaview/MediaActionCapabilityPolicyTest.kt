@@ -34,7 +34,7 @@ class MediaActionCapabilityPolicyTest {
     }
 
     @Test
-    fun cloudReadOnlyAllowsViewingAndDownloadButNoExportOrMutation() {
+    fun cloudReadOnlyAllowsTransferAndDownloadButNoSourceMutation() {
         val result = MediaActionCapabilityPolicy.resolve(
             MediaActionPolicyInput(
                 isCloud = true,
@@ -54,6 +54,7 @@ class MediaActionCapabilityPolicyTest {
         assertFalse(result.trash)
         assertFalse(result.cutout)
         assertTrue(result.download)
+        assertTrue(result.copyOrMove)
         assertFalse(result.openExternally)
     }
 
@@ -80,6 +81,7 @@ class MediaActionCapabilityPolicyTest {
         assertTrue(withoutProviderCapabilities.trash) // permanent delete remains available
         assertTrue(withProviderCapabilities.favorite)
         assertTrue(withProviderCapabilities.trash)
+        assertTrue(withProviderCapabilities.copyOrMove)
         assertFalse(withProviderCapabilities.edit)
         assertFalse(withProviderCapabilities.rotate)
     }

@@ -5,6 +5,9 @@
 
 package com.dot.gallery.cloud.core
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 enum class ProviderCapability {
     PEOPLE,
     MAP,
@@ -15,6 +18,7 @@ enum class ProviderCapability {
     /** Can list, edit, and revoke previously created share links. */
     SHARE_MANAGE,
     SYNC,
+    ALBUM_WRITE,
     REMOTE_ALBUMS,
     REMOTE_ASSETS,
     OCR,

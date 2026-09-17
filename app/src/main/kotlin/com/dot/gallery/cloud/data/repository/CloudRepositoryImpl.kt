@@ -22,7 +22,11 @@ import com.dot.gallery.cloud.core.SharedLinkInfo
 import com.dot.gallery.cloud.core.capabilities.MapCapableProvider
 import com.dot.gallery.cloud.core.capabilities.MemoriesCapableProvider
 import com.dot.gallery.cloud.core.capabilities.PeopleCapableProvider
+import com.dot.gallery.cloud.core.capabilities.RemoteAlbumCopyResult
+import com.dot.gallery.cloud.core.capabilities.RemoteAlbumCopyState
+import com.dot.gallery.cloud.core.capabilities.RemoteAlbumWriteProvider
 import com.dot.gallery.cloud.core.capabilities.RemoteMediaProvider
+import com.dot.gallery.cloud.core.capabilities.RemoteNameConflictPolicy
 import com.dot.gallery.cloud.core.capabilities.ShareLinkCapableProvider
 import com.dot.gallery.cloud.core.capabilities.SmartSearchCapableProvider
 import com.dot.gallery.cloud.core.capabilities.SyncCapableProvider
@@ -31,6 +35,7 @@ import com.dot.gallery.cloud.data.entity.CloudMediaEntity
 import com.dot.gallery.cloud.network.ServerUrlResolver
 import com.dot.gallery.core.Resource
 import com.dot.gallery.feature_node.domain.model.Media
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -79,6 +84,59 @@ internal fun getRemoteAlbumMediaForAccount(
         capabilityName = "remote albums"
     ).getOrElse { return flowOf(Resource.Error(it.message ?: "Provider account not available")) }
     return provider.getRemoteAlbumMedia(albumId)
+}
+
+internal suspend fun copyRemoteAlbumForAccount(
+    registry: ProviderRegistry,
+    type: ProviderType,
+    configId: Long,
+    remoteAlbumId: String,
+    localMedia: Media,
+    conflictPolicy: RemoteNameConflictPolicy,
+    checksum: String?,
+    continuationRemoteId: String?
+): RemoteAlbumCopyResult {
+    val provider = resolveProviderAccount<RemoteAlbumWriteProvider>(
+        registry = registry,
+        type = type,
+        configId = configId,
+        capabilityName = "album writes"
+    ).getOrElse {
+        return RemoteAlbumCopyResult(
+            state = RemoteAlbumCopyState.FAILED,
+            message = it.message ?: "Provider account not available"
+        )
+    }
+    if (ProviderCapability.ALBUM_WRITE !in provider.capabilities) {
+        return RemoteAlbumCopyResult(
+            state = RemoteAlbumCopyState.FAILED,
+            message = "Provider account $configId does not support album writes"
+        )
+    }
+    if (!provider.isAvailable) {
+        return RemoteAlbumCopyResult(
+            state = RemoteAlbumCopyState.FAILED,
+            message = "Provider account $configId is not connected",
+            retryable = true
+        )
+    }
+    return try {
+        provider.copyToAlbum(
+            media = localMedia,
+            remoteAlbumId = remoteAlbumId,
+            conflictPolicy = conflictPolicy,
+            checksum = checksum,
+            continuationRemoteId = continuationRemoteId
+        )
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        RemoteAlbumCopyResult(
+            state = RemoteAlbumCopyState.FAILED,
+            message = e.message ?: "Remote copy failed",
+            retryable = true
+        )
+    }
 }
 
 @Singleton
@@ -264,6 +322,25 @@ class CloudRepositoryImpl @Inject constructor(
             ?: return Result.failure(Exception("Provider does not support sync"))
         return provider.uploadAsset(localMedia, targetPath)
     }
+
+    override suspend fun copyAssetToAlbum(
+        type: ProviderType,
+        configId: Long,
+        remoteAlbumId: String,
+        localMedia: Media,
+        conflictPolicy: RemoteNameConflictPolicy,
+        checksum: String?,
+        continuationRemoteId: String?
+    ): RemoteAlbumCopyResult = copyRemoteAlbumForAccount(
+        registry = registry,
+        type = type,
+        configId = configId,
+        remoteAlbumId = remoteAlbumId,
+        localMedia = localMedia,
+        conflictPolicy = conflictPolicy,
+        checksum = checksum,
+        continuationRemoteId = continuationRemoteId
+    )
 
     override suspend fun downloadAsset(type: ProviderType, remoteId: String): Result<Uri> {
         val provider = registry.get(type) as? SyncCapableProvider

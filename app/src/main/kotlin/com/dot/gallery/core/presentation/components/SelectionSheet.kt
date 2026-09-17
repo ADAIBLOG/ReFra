@@ -292,11 +292,9 @@ fun <T : Media> BoxScope.SelectionSheet(
         trashSupported = SdkCompat.supportsTrash
     )
 
-    // Cloud/remote albums: when the whole selection is remote media, the local
-    // actions (copy/move/vault/edit/rotate/local-trash) don't apply. We swap the
-    // bottom bar for provider-aware remote actions instead. All provider resolution
-    // and capability logic lives in CloudSelectionViewModel; the sheet only reads the
-    // resolved flags to decide which buttons to render.
+    // Cloud/remote selections use provider-aware source mutations plus copy/move transfers.
+    // All provider resolution and capability logic lives in CloudSelectionViewModel; the sheet
+    // only reads the resolved flags to decide which buttons to render.
     val cloudSelectionViewModel = hiltViewModel<CloudSelectionViewModel>()
     val cloudTrashConfirmState = rememberAppBottomSheetState()
     val cloudDeleteConfirmState = rememberAppBottomSheetState()
@@ -520,6 +518,24 @@ fun <T : Media> BoxScope.SelectionSheet(
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 if (isCloudSelection) {
+                    if (albumsState.value.albums.isNotEmpty() && cloudActionCapabilities.copyOrMove) {
+                        SelectionBarColumn(
+                            imageVector = SelectionAction.COPY.icon,
+                            tabletMode = tabletMode,
+                            title = stringResource(SelectionAction.COPY.labelRes)
+                        ) {
+                            scope.launch { copySheetState.show() }
+                        }
+                        if (!cloudSelectionReadOnly) {
+                            SelectionBarColumn(
+                                imageVector = SelectionAction.MOVE.icon,
+                                tabletMode = tabletMode,
+                                title = stringResource(SelectionAction.MOVE.labelRes)
+                            ) {
+                                scope.launch { moveSheetState.show() }
+                            }
+                        }
+                    }
                     // Share — resolveShareableUri downloads/caches the full-size original,
                     // then shares it via a FileProvider content URI.
                     if (cloudActionCapabilities.share) {
