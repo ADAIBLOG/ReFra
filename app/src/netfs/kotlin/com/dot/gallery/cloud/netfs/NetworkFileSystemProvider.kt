@@ -57,6 +57,26 @@ import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 
+internal class NetFsThumbnailSingleFlight {
+    private data class Entry(val monitor: Any = Any(), var users: Int = 0)
+
+    private val entries = mutableMapOf<String, Entry>()
+
+    fun <T> run(key: String, block: () -> T): T {
+        val entry = synchronized(entries) {
+            entries.getOrPut(key) { Entry() }.also { it.users++ }
+        }
+        return try {
+            synchronized(entry.monitor) { block() }
+        } finally {
+            synchronized(entries) {
+                entry.users--
+                if (entry.users == 0 && entries[key] === entry) entries.remove(key)
+            }
+        }
+    }
+}
+
 /**
  * Generic network-filesystem [RemoteMediaProvider]. All protocol-agnostic behavior lives
  * here; per-protocol I/O is delegated to a [FileSystemBackend]. SMB and NFS are instances
@@ -186,7 +206,15 @@ open class NetworkFileSystemProvider(
         try {
             val conn = requireConnection()
             val configId = currentConfig?.id ?: 0L
-            val paged = mediaIndex(conn).page(page, pageSize).map { it.toEntity(configId) }
+            val index = mediaIndex(conn)
+            if (page == 0 && configId > 0L) {
+                cloudMediaDao.deleteMissingRemoteMedia(
+                    configId,
+                    backend.providerType,
+                    index.inAlbum("").map { it.relativePath }
+                )
+            }
+            val paged = index.page(page, pageSize).map { it.toEntity(configId) }
             cloudMediaDao.insertAll(paged)
             emit(Resource.Success(paged))
         } catch (e: CancellationException) {
@@ -308,6 +336,7 @@ open class NetworkFileSystemProvider(
             cloudMediaDao.delete(remoteId, backend.providerType, configId)
             Result.success(Unit)
         } catch (e: Exception) {
+            CloudTrace.w("${backend.providerType} delete '$remoteId' failed: ${e.message}", e)
             Result.failure(e)
         }
     }
@@ -415,13 +444,12 @@ open class NetworkFileSystemProvider(
 
         // Single-flight per cache key: when Glide and Sketch request the same thumbnail at once,
         // only one thread reads+decodes the original; the rest reuse the just-written cache file.
-        val lock = thumbLocks[(cacheFile.name.hashCode() and 0x7fffffff) % thumbLocks.size]
-        synchronized(lock) {
+        return thumbnailFlights.run(cacheFile.name) {
             cacheFile.takeIf { it.isFile && it.length() > 0 }?.let { f ->
-                runCatching { f.readBytes() }.getOrNull()?.let { return it }
+                runCatching { f.readBytes() }.getOrNull()?.let { return@run it }
             }
             val bytes = if (mime.startsWith("video/")) {
-                NetFsThumbnailer.fromVideoUrl(getOriginalUrl(path), size)
+                NetFsThumbnailer.fromVideoUrl(context, getOriginalUrl(path), size)
             } else {
                 NetFsThumbnailer.fromImage(
                     open = { loopbackOpen(path, 0L) },
@@ -439,7 +467,7 @@ open class NetworkFileSystemProvider(
                     CloudTrace.d("NetFs thumb cache STORE $size '$path' (${CloudTrace.bytes(bytes.size.toLong())})")
                 }.onFailure { CloudTrace.w("NetFs thumb cache write failed for '$path': ${it.message}") }
             }
-            return bytes
+            bytes
         }
     }
 
@@ -447,8 +475,8 @@ open class NetworkFileSystemProvider(
         File(context.cacheDir, "netfs_thumb_cache").apply { mkdirs() }
     }
 
-    /** Stripe locks for single-flight thumbnail generation (bounded, vs. one lock per file). */
-    private val thumbLocks = Array(16) { Any() }
+    /** Exact-key single-flight entries are removed as soon as their callers finish. */
+    private val thumbnailFlights = NetFsThumbnailSingleFlight()
 
     /** Cache file keyed by account + path + size + file size (so edits/replacements invalidate). */
     private fun thumbnailCacheFile(path: String, size: ThumbnailSize, fileSize: Long): File {

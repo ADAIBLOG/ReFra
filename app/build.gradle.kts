@@ -592,6 +592,10 @@ dependencies {
     }
 
     // Network filesystem providers (gated)
+    if (includeSmb || includeNfs) {
+        implementation(libs.androidx.media3.inspector)
+        implementation(libs.androidx.media3.inspector.frame)
+    }
     if (includeSmb) {
         implementation(libs.smbj)
     }

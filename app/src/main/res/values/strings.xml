@@ -964,6 +964,7 @@
     <string name="cloud_media_trash_confirm_summary">The selected items will be moved to the server\'s trash. You can restore them later.</string>
     <string name="cloud_media_delete_confirm_title">Delete permanently?</string>
     <string name="cloud_media_delete_confirm_summary">The selected items will be permanently deleted from the server. This cannot be undone.</string>
+    <string name="cloud_media_delete_failed">Couldn’t delete from the server. Check that this account can modify the remote folder.</string>
     <string name="extended_date_header_title">Extended Date Header</string>
     <string name="clear_selection">Remove All</string>
     <string name="selfies">Selfies</string>

@@ -18,6 +18,9 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class NetworkFileSystemSupportTest {
 
@@ -91,6 +94,70 @@ class NetworkFileSystemSupportTest {
             parseNetFsLoopbackRoute(routePath, "token")
         )
         assertNull(parseNetFsLoopbackRoute(routePath, "different-token"))
+    }
+
+    @Test
+    fun thumbnailSingleFlightKeepsDifferentKeysIndependent() {
+        val singleFlight = NetFsThumbnailSingleFlight()
+        val firstStarted = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val executor = Executors.newFixedThreadPool(2)
+
+        try {
+            val first = executor.submit<Int> {
+                singleFlight.run("slow") {
+                    firstStarted.countDown()
+                    assertTrue(releaseFirst.await(5, TimeUnit.SECONDS))
+                    1
+                }
+            }
+            assertTrue(firstStarted.await(5, TimeUnit.SECONDS))
+            val second = executor.submit<Int> { singleFlight.run("fast") { 2 } }
+
+            assertEquals(2, second.get(5, TimeUnit.SECONDS))
+            releaseFirst.countDown()
+            assertEquals(1, first.get(5, TimeUnit.SECONDS))
+        } finally {
+            releaseFirst.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun thumbnailSingleFlightSerializesTheSameKey() {
+        val singleFlight = NetFsThumbnailSingleFlight()
+        val firstStarted = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val secondSubmitted = CountDownLatch(1)
+        val secondStarted = CountDownLatch(1)
+        val executor = Executors.newFixedThreadPool(2)
+
+        try {
+            val first = executor.submit<Int> {
+                singleFlight.run("same") {
+                    firstStarted.countDown()
+                    assertTrue(releaseFirst.await(5, TimeUnit.SECONDS))
+                    1
+                }
+            }
+            assertTrue(firstStarted.await(5, TimeUnit.SECONDS))
+            val second = executor.submit<Int> {
+                secondSubmitted.countDown()
+                singleFlight.run("same") {
+                    secondStarted.countDown()
+                    2
+                }
+            }
+
+            assertTrue(secondSubmitted.await(5, TimeUnit.SECONDS))
+            assertFalse(secondStarted.await(200, TimeUnit.MILLISECONDS))
+            releaseFirst.countDown()
+            assertEquals(1, first.get(5, TimeUnit.SECONDS))
+            assertEquals(2, second.get(5, TimeUnit.SECONDS))
+        } finally {
+            releaseFirst.countDown()
+            executor.shutdownNow()
+        }
     }
 
     private fun entry(path: String, modified: Long) = NetFsEntry(

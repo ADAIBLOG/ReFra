@@ -408,6 +408,54 @@ interface CloudMediaDao {
 
     @Query(
         """
+        SELECT remoteId FROM cloud_media
+        WHERE providerType = :providerType AND serverConfigId = :serverConfigId
+        """
+    )
+    suspend fun getRemoteIds(providerType: ProviderType, serverConfigId: Long): List<String>
+
+    @Query(
+        """
+        DELETE FROM cloud_backup_revision
+        WHERE serverConfigId = :serverConfigId AND remoteId IN (:remoteIds)
+        """
+    )
+    suspend fun deleteBackupRevisionsByRemoteIds(
+        serverConfigId: Long,
+        remoteIds: List<String>
+    )
+
+    @Query(
+        """
+        DELETE FROM cloud_media
+        WHERE providerType = :providerType AND serverConfigId = :serverConfigId
+            AND remoteId IN (:remoteIds)
+        """
+    )
+    suspend fun deleteByRemoteIdsRaw(
+        providerType: ProviderType,
+        serverConfigId: Long,
+        remoteIds: List<String>
+    )
+
+    @Transaction
+    suspend fun deleteMissingRemoteMedia(
+        serverConfigId: Long,
+        providerType: ProviderType,
+        currentRemoteIds: Collection<String>
+    ) {
+        val current = currentRemoteIds.toHashSet()
+        getRemoteIds(providerType, serverConfigId)
+            .filterNot(current::contains)
+            .chunked(900)
+            .forEach { remoteIds ->
+                deleteBackupRevisionsByRemoteIds(serverConfigId, remoteIds)
+                deleteByRemoteIdsRaw(providerType, serverConfigId, remoteIds)
+            }
+    }
+
+    @Query(
+        """
         DELETE FROM cloud_media
         WHERE remoteId = :remoteId AND providerType = :providerType AND serverConfigId = :serverConfigId
         """

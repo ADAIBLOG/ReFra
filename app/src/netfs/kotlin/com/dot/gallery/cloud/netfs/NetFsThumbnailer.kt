@@ -5,15 +5,28 @@
 
 package com.dot.gallery.cloud.netfs
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
+import android.os.Handler
+import android.os.HandlerThread
+import androidx.annotation.OptIn
 import androidx.exifinterface.media.ExifInterface
+import androidx.media3.common.MediaItem
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.inspector.frame.FrameExtractor
 import com.dot.gallery.cloud.core.CloudTrace
 import com.dot.gallery.cloud.core.ThumbnailSize
+import com.dot.gallery.cloud.image.firstAvailableVideoFrame
+import com.google.common.util.concurrent.ListenableFuture
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Generates JPEG thumbnails/previews on-device, since network filesystems expose no
@@ -28,6 +41,10 @@ internal object NetFsThumbnailer {
     // negotiated max read size, typically ~1 MB), so the stdlib 8 KB default produced hundreds of
     // round-trips per file — slow enough that OkHttp timed out and thumbnails came back blank.
     private const val READ_BUFFER_BYTES = 1024 * 1024
+    private const val MEDIA3_FRAME_TIMEOUT_SECONDS = 15L
+    private val media3Thread by lazy { HandlerThread("NetFsMedia3Frame").apply { start() } }
+    private val media3Handler by lazy { Handler(media3Thread.looper) }
+    private val media3Executor by lazy { Executor { command -> media3Handler.post(command) } }
 
     fun targetDimension(size: ThumbnailSize): Int =
         if (size == ThumbnailSize.THUMBNAIL) 256 else 1024
@@ -71,18 +88,71 @@ internal object NetFsThumbnailer {
             out.toByteArray()
         }
 
-    fun fromVideoUrl(url: String, size: ThumbnailSize): ByteArray? {
+    fun fromVideoUrl(context: Context, url: String, size: ThumbnailSize): ByteArray? {
         val retriever = MediaMetadataRetriever()
-        return try {
+        val platformFrame = try {
             retriever.setDataSource(url, emptyMap())
-            val frame = retriever.getFrameAtTime(-1) ?: return null
-            val scaled = scaleBitmap(frame, targetDimension(size))
-            encode(scaled)
+            val durationMillis = retriever
+                .extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull()
+            firstAvailableVideoFrame(durationMillis) { timeUs ->
+                runCatching {
+                    retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                }.getOrNull()
+            }
         } catch (_: Exception) {
             null
         } finally {
             runCatching { retriever.release() }
         }
+        val frame = platformFrame ?: CloudTrace.time("NetFsThumbnailer Media3 video frame") {
+            media3Frame(context, url)
+        }
+        return frame?.let { encode(scaleBitmap(it, targetDimension(size))) }
+    }
+
+    @OptIn(UnstableApi::class)
+    private fun media3Frame(context: Context, url: String): Bitmap? {
+        val completed = CountDownLatch(1)
+        val result = AtomicReference<Bitmap?>()
+        val extractorRef = AtomicReference<FrameExtractor?>()
+        val futureRef = AtomicReference<ListenableFuture<FrameExtractor.Frame>?>()
+        if (!media3Handler.post {
+                try {
+                    val extractor = FrameExtractor.Builder(
+                        context.applicationContext,
+                        MediaItem.fromUri(url)
+                    ).build()
+                    extractorRef.set(extractor)
+                    val future = extractor.thumbnail
+                    futureRef.set(future)
+                    future.addListener(
+                        {
+                            result.set(runCatching { future.get().bitmap }.getOrNull())
+                            runCatching { extractorRef.getAndSet(null)?.close() }
+                            completed.countDown()
+                        },
+                        media3Executor
+                    )
+                } catch (_: Exception) {
+                    runCatching { extractorRef.getAndSet(null)?.close() }
+                    completed.countDown()
+                }
+            }) return null
+        val finished = try {
+            completed.await(MEDIA3_FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+        if (!finished) {
+            media3Handler.post {
+                futureRef.getAndSet(null)?.cancel(true)
+                runCatching { extractorRef.getAndSet(null)?.close() }
+            }
+            return null
+        }
+        return result.get()
     }
 
     private fun downscale(bytes: ByteArray, target: Int): ByteArray? {

@@ -19,6 +19,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -146,6 +147,32 @@ class CloudMediaDaoTest {
             )
         )
         assertEquals(2, dao.getAllForTimeline().first().size)
+    }
+
+    @Test
+    fun remoteIndexReconciliationRemovesOnlyMissingRowsFromItsAccount() = runBlocking {
+        dao.insertAll(
+            listOf(
+                media("current", ProviderType.SMB, 1L),
+                media("missing", ProviderType.SMB, 1L),
+                media("missing", ProviderType.SMB, 2L),
+                media("missing", ProviderType.NFS, 1L)
+            )
+        )
+        dao.upsertBackupRevision(
+            revision("content://media/missing").copy(
+                providerType = ProviderType.SMB,
+                remoteId = "missing"
+            )
+        )
+
+        dao.deleteMissingRemoteMedia(1L, ProviderType.SMB, listOf("current"))
+
+        assertEquals("current", dao.getByRemoteId("current", ProviderType.SMB, 1L)?.remoteId)
+        assertNull(dao.getByRemoteId("missing", ProviderType.SMB, 1L))
+        assertEquals("missing", dao.getByRemoteId("missing", ProviderType.SMB, 2L)?.remoteId)
+        assertEquals("missing", dao.getByRemoteId("missing", ProviderType.NFS, 1L)?.remoteId)
+        assertTrue(dao.getBackupRevisions(1L).isEmpty())
     }
 
     @Test

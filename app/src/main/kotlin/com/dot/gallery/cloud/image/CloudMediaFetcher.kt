@@ -204,6 +204,22 @@ object CloudFetcherRegistryHolder {
 class NoPreviewAvailableException(remoteId: String) :
     Exception("No server preview available for $remoteId")
 
+internal fun <T> firstAvailableVideoFrame(
+    durationMillis: Long?,
+    frameAtTime: (Long) -> T?
+): T? {
+    val times = buildList {
+        add(-1L)
+        add(0L)
+        add(1_000_000L)
+        durationMillis?.takeIf { it > 0L }?.let {
+            add(it.coerceAtMost(Long.MAX_VALUE / 500L) * 500L)
+        }
+    }.distinct()
+    times.forEach { timeUs -> frameAtTime(timeUs)?.let { return it } }
+    return null
+}
+
 fun ComponentRegistry.Builder.supportCloudMedia() {
     add(CloudMediaFetcher.Factory())
 }

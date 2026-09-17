@@ -7,6 +7,7 @@ package com.dot.gallery.cloud
 
 import com.dot.gallery.cloud.core.CloudUri
 import com.dot.gallery.cloud.core.ProviderType
+import com.dot.gallery.cloud.image.firstAvailableVideoFrame
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -121,5 +122,18 @@ class CloudUriTest {
         val uri = CloudUri.parse("cloud://SMB/gallery/img.jpg?size=preview")!!
         assertEquals("preview", uri.effectiveSize(0))
         assertEquals("preview", uri.effectiveSize(-1))
+    }
+
+    @Test
+    fun videoFrameFallsBackFromRepresentativeAndStartToLaterTimestamps() {
+        val requestedTimes = mutableListOf<Long>()
+
+        val frame = firstAvailableVideoFrame(durationMillis = 10_000L) { timeUs ->
+            requestedTimes += timeUs
+            "frame".takeIf { timeUs == 5_000_000L }
+        }
+
+        assertEquals("frame", frame)
+        assertEquals(listOf(-1L, 0L, 1_000_000L, 5_000_000L), requestedTimes)
     }
 }

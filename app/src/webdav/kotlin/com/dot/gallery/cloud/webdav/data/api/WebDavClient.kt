@@ -199,7 +199,9 @@ class WebDavClient(
             .header("Authorization", credentials)
             .build()
         okHttpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw WebDavException("DELETE", response.code, response.message)
+            if (!response.isSuccessful && response.code != 404 && response.code != 410) {
+                throw WebDavException("DELETE", response.code, response.message)
+            }
         }
     }
 

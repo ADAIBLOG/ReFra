@@ -298,6 +298,7 @@ fun <T : Media> BoxScope.SelectionSheet(
     val cloudSelectionViewModel = hiltViewModel<CloudSelectionViewModel>()
     val cloudTrashConfirmState = rememberAppBottomSheetState()
     val cloudDeleteConfirmState = rememberAppBottomSheetState()
+    val cloudDeleteFailedText = stringResource(R.string.cloud_media_delete_failed)
     val selectedSnapshot = selectedMedia.toList()
     val isCloudSelection = cloudSelectionViewModel.isCloudSelection(selectedSnapshot)
     val isMixedCloudSelection = selectedSnapshot.any { it.isCloud } && !isCloudSelection
@@ -1062,8 +1063,15 @@ fun <T : Media> BoxScope.SelectionSheet(
         onConfirm = {
             val toTrash = selectedMedia.toList()
             scope.launch {
-                cloudSelectionViewModel.trash(result, toTrash)
-                selector.clearSelection()
+                when (cloudSelectionViewModel.trash(result, toTrash)) {
+                    MediaMutationResult.COMPLETED -> selector.clearSelection()
+                    MediaMutationResult.FAILED -> Toast.makeText(
+                        context,
+                        cloudDeleteFailedText,
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    MediaMutationResult.REQUEST_LAUNCHED -> Unit
+                }
             }
         }
     )
@@ -1075,8 +1083,15 @@ fun <T : Media> BoxScope.SelectionSheet(
         onConfirm = {
             val toDelete = selectedMedia.toList()
             scope.launch {
-                cloudSelectionViewModel.delete(result, toDelete)
-                selector.clearSelection()
+                when (cloudSelectionViewModel.delete(result, toDelete)) {
+                    MediaMutationResult.COMPLETED -> selector.clearSelection()
+                    MediaMutationResult.FAILED -> Toast.makeText(
+                        context,
+                        cloudDeleteFailedText,
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    MediaMutationResult.REQUEST_LAUNCHED -> Unit
+                }
             }
         }
     )

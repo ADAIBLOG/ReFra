@@ -24,15 +24,22 @@ import com.dot.gallery.cloud.data.entity.CloudMediaEntity
 import com.dot.gallery.cloud.data.repository.copyRemoteAlbumForAccount
 import com.dot.gallery.cloud.data.repository.getRemoteAlbumMediaForAccount
 import com.dot.gallery.cloud.data.repository.resolveProviderAccount
+import com.dot.gallery.cloud.image.awaitInitializedRemoteProvider
 import com.dot.gallery.cloud.util.resolveCloudDownloadProvider
 import com.dot.gallery.core.Resource
 import com.dot.gallery.feature_node.domain.model.Media
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -151,6 +158,50 @@ class CloudAlbumRepositoryIdentityTest {
         assertEquals(RemoteAlbumCopyState.COPIED, result.state)
         assertEquals(emptyList<String>(), first.copyRequests)
         assertEquals(listOf("shared-album"), second.copyRequests)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun cloudImageProviderWaitsUntilAccountInitializationCompletes() = runTest {
+        val registry = ProviderRegistry()
+        val pending = async {
+            awaitInitializedRemoteProvider(
+                registry,
+                ProviderType.IMMICH,
+                202L,
+                timeoutMillis = 5_000L
+            )
+        }
+        runCurrent()
+        assertFalse(pending.isCompleted)
+        val provider = AlbumProvider(configId = 202L)
+        registry._providers[202L] = provider
+        registry.updateConnectionState(202L, ConnectionState.AUTHENTICATING)
+        runCurrent()
+        assertFalse(pending.isCompleted)
+
+        registry.updateConnectionState(202L, ConnectionState.CONNECTED)
+        runCurrent()
+
+        assertSame(provider, pending.await())
+    }
+
+    @Test
+    fun cloudImageProviderCanUseConfiguredAccountAfterAuthenticationFailure() = runTest {
+        val registry = ProviderRegistry()
+        val provider = AlbumProvider(configId = 202L)
+        registry._providers[202L] = provider
+        registry.updateConnectionState(202L, ConnectionState.ERROR)
+
+        assertSame(
+            provider,
+            awaitInitializedRemoteProvider(
+                registry,
+                ProviderType.IMMICH,
+                202L,
+                timeoutMillis = 5_000L
+            )
+        )
     }
 
     private class AlbumProvider(private val configId: Long) :

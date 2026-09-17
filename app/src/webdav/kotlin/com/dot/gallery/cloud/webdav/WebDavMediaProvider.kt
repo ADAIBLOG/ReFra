@@ -32,6 +32,7 @@ import com.dot.gallery.cloud.core.capabilities.RemoteNameConflictPolicy
 import com.dot.gallery.cloud.core.capabilities.ShareLinkCapableProvider
 import com.dot.gallery.cloud.core.capabilities.remoteAlbumFilePath
 import com.dot.gallery.cloud.core.capabilities.remoteCopyFileName
+import com.dot.gallery.cloud.image.firstAvailableVideoFrame
 import com.dot.gallery.cloud.data.dao.CloudMediaDao
 import com.dot.gallery.cloud.data.entity.CloudMediaEntity
 import com.dot.gallery.cloud.webdav.data.api.WebDavClient
@@ -65,6 +66,9 @@ import java.util.concurrent.ConcurrentHashMap
 import javax.net.ssl.SSLException
 
 internal fun canCacheWebDavChecksum(etag: String): Boolean = etag.isNotBlank()
+
+internal fun shouldReconcileWebDavScan(page: Int, configId: Long, complete: Boolean): Boolean =
+    page == 0 && configId > 0L && complete
 
 /**
  * Generic WebDAV-backed [RemoteMediaProvider]. All server-agnostic behavior lives
@@ -185,8 +189,15 @@ open class WebDavMediaProvider(
         try {
             val client = webDavClient ?: throw IllegalStateException("Not configured")
             val configId = currentConfig?.id ?: 0L
-            val mediaFiles = scanMediaFiles(client, "")
-            val paged = mediaFiles.drop(page * pageSize).take(pageSize)
+            val scan = scanMediaFiles(client, "")
+            if (shouldReconcileWebDavScan(page, configId, scan.complete)) {
+                cloudMediaDao.deleteMissingRemoteMedia(
+                    configId,
+                    dialect.providerType,
+                    scan.files.map { client.relativePath(it.href) }
+                )
+            }
+            val paged = scan.files.drop(page * pageSize).take(pageSize)
             val entities = paged.map { it.toCloudMediaEntity(configId) }
             cloudMediaDao.insertAll(entities)
             emit(Resource.Success(entities))
@@ -208,7 +219,7 @@ open class WebDavMediaProvider(
         try {
             val client = webDavClient ?: throw IllegalStateException("Not configured")
             val configId = currentConfig?.id ?: 0L
-            val favorites = scanMediaFiles(client, "")
+            val favorites = scanMediaFiles(client, "").files
                 .filter { it.favorite }
                 .map { it.toCloudMediaEntity(configId) }
             emit(Resource.Success(favorites))
@@ -265,7 +276,7 @@ open class WebDavMediaProvider(
         try {
             val client = webDavClient ?: throw IllegalStateException("Not configured")
             val configId = currentConfig?.id ?: 0L
-            val mediaFiles = scanMediaFiles(client, albumId)
+            val mediaFiles = scanMediaFiles(client, albumId).files
             emit(Resource.Success(mediaFiles.map { it.toCloudMediaEntity(configId) }))
         } catch (e: CancellationException) {
             // The consumer cancelled (e.g. a `first()`/`take()` prefetch). Re-throw so the
@@ -331,7 +342,7 @@ open class WebDavMediaProvider(
         return try {
             val client = webDavClient ?: throw IllegalStateException("Not configured")
             val configId = currentConfig?.id ?: 0L
-            val matched = scanMediaFiles(client, "")
+            val matched = scanMediaFiles(client, "").files
                 .filter { it.displayName.contains(query, ignoreCase = true) }
                 .map { it.toCloudMediaEntity(configId) }
             Result.success(matched)
@@ -389,7 +400,14 @@ open class WebDavMediaProvider(
             val retriever = MediaMetadataRetriever()
             try {
                 retriever.setDataSource(url, getAuthHeaders())
-                val frame = retriever.getFrameAtTime(-1) ?: return@withContext null
+                val durationMillis = retriever
+                    .extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                    ?.toLongOrNull()
+                val frame = firstAvailableVideoFrame(durationMillis) { timeUs ->
+                    runCatching {
+                        retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    }.getOrNull()
+                } ?: return@withContext null
                 val target = if (size == ThumbnailSize.THUMBNAIL) 256 else 1024
                 val scaled = scaleBitmap(frame, target)
                 ByteArrayOutputStream().use { out ->
@@ -607,7 +625,7 @@ open class WebDavMediaProvider(
         return try {
             val client = webDavClient ?: throw IllegalStateException("Not configured")
             val configId = currentConfig?.id ?: 0L
-            Result.success(scanMediaFiles(client, "").map { it.toCloudMediaEntity(configId) })
+            Result.success(scanMediaFiles(client, "").files.map { it.toCloudMediaEntity(configId) })
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -746,21 +764,32 @@ open class WebDavMediaProvider(
     private fun isVideoPath(path: String): Boolean =
         path.substringAfterLast('.', "").lowercase() in videoExtensions
 
-    private fun scanMediaFiles(client: WebDavClient, path: String, depth: Int = 0): List<WebDavResource> {
-        if (depth > 3) return emptyList()
+    private data class WebDavMediaScan(
+        val files: List<WebDavResource>,
+        val complete: Boolean
+    )
+
+    private fun scanMediaFiles(client: WebDavClient, path: String, depth: Int = 0): WebDavMediaScan {
+        if (depth > 3) return WebDavMediaScan(emptyList(), false)
         return try {
-            val resources = client.propFind(path, depth = 1)
-            resources.drop(1).flatMap { res ->
-                if (res.isCollection) {
-                    val subPath = client.relativePath(res.href)
-                    if (subPath.isNotBlank()) scanMediaFiles(client, subPath, depth + 1) else emptyList()
+            val files = mutableListOf<WebDavResource>()
+            var complete = true
+            client.propFind(path, depth = 1).drop(1).forEach { resource ->
+                if (resource.isCollection) {
+                    val subPath = client.relativePath(resource.href)
+                    if (subPath.isNotBlank()) {
+                        val nested = scanMediaFiles(client, subPath, depth + 1)
+                        files += nested.files
+                        complete = complete && nested.complete
+                    }
                 } else {
-                    val ext = res.displayName.substringAfterLast('.', "").lowercase()
-                    if (ext in mediaExtensions) listOf(res) else emptyList()
+                    val ext = resource.displayName.substringAfterLast('.', "").lowercase()
+                    if (ext in mediaExtensions) files += resource
                 }
             }
+            WebDavMediaScan(files, complete)
         } catch (_: Exception) {
-            emptyList()
+            WebDavMediaScan(emptyList(), false)
         }
     }
 

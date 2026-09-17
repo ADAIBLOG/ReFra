@@ -16,6 +16,8 @@ import com.emc.ecs.nfsclient.nfs.io.NfsFileInputStream
 import com.emc.ecs.nfsclient.nfs.io.NfsFileOutputStream
 import com.emc.ecs.nfsclient.nfs.nfs3.Nfs3
 import com.emc.ecs.nfsclient.rpc.CredentialUnix
+import java.io.FileNotFoundException
+import java.io.IOException
 import java.io.InputStream
 
 /**
@@ -114,7 +116,14 @@ class NfsBackend : FileSystemBackend {
 
     override fun delete(conn: NetFsConnection, path: String) {
         val c = conn as NfsConnection
-        Nfs3File(c.nfs, nfsPath(path)).delete()
+        try {
+            val file = Nfs3File(c.nfs, nfsPath(path))
+            if (!file.exists()) return
+            file.delete()
+            if (file.exists()) throw IOException("NFS server kept deleted path $path")
+        } catch (_: FileNotFoundException) {
+            return
+        }
     }
 
     override fun mkdir(conn: NetFsConnection, path: String) {

@@ -17,15 +17,31 @@ import com.bumptech.glide.load.model.MultiModelLoaderFactory
 import com.bumptech.glide.signature.ObjectKey
 import com.dot.gallery.cloud.core.CloudTrace
 import com.dot.gallery.cloud.core.CloudUri
+import com.dot.gallery.cloud.core.ConnectionState
+import com.dot.gallery.cloud.core.ProviderRegistry
+import com.dot.gallery.cloud.core.ProviderType
 import com.dot.gallery.cloud.core.ThumbnailSize
 import com.dot.gallery.cloud.core.capabilities.PeopleCapableProvider
 import com.dot.gallery.cloud.core.capabilities.RemoteMediaProvider
 import com.dot.gallery.cloud.core.resolveRemote
 import com.dot.gallery.cloud.offline.CloudMediaCache
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import java.io.ByteArrayInputStream
+import java.io.IOException
 import java.io.InputStream
 
 /**
@@ -47,12 +63,6 @@ class CloudGlideModelLoader : ModelLoader<Uri, InputStream> {
 
         // Shared slash-tolerant parse (remoteId may contain '/', e.g. WebDAV "Photos/IMG.jpg").
         val parsed = CloudUri.parse(model.toString()) ?: return null
-        val providerType = parsed.providerType
-        val remoteId = parsed.remoteId
-        val typeParam = parsed.typeParam
-        val fileId = parsed.fileId
-        val configId = parsed.configId
-        val provider = registry.resolveRemote(providerType, configId) ?: return null
 
         // Glide only renders grid/album thumbnails for cloud media (the media viewer uses Sketch).
         // When Glide requests a small target (a grid cell), fetch the small THUMBNAIL instead of
@@ -60,43 +70,15 @@ class CloudGlideModelLoader : ModelLoader<Uri, InputStream> {
         // endpoints, much cheaper for the server to generate. `original` and person thumbnails are
         // left untouched. A non-positive size (Target.SIZE_ORIGINAL) keeps the requested size.
         val effectiveSize = parsed.effectiveSize(maxOf(width, height))
-
-        val url = when (typeParam) {
-            "person" -> {
-                (provider as? PeopleCapableProvider)?.getPersonThumbnailUrl(remoteId) ?: return null
-            }
-            else -> when (effectiveSize) {
-                "thumbnail" -> provider.getThumbnailUrl(remoteId, ThumbnailSize.THUMBNAIL, fileId)
-                "preview" -> provider.getThumbnailUrl(remoteId, ThumbnailSize.PREVIEW, fileId)
-                "original" -> provider.getOriginalUrl(remoteId)
-                else -> provider.getThumbnailUrl(remoteId, ThumbnailSize.PREVIEW, fileId)
-            }
+        val acct = if (parsed.configId > 0L) "${parsed.configId}/" else ""
+        val cacheKey = if (parsed.typeParam != null) {
+            "${parsed.providerType.name}/$acct${parsed.typeParam}/${parsed.remoteId}"
+        } else {
+            "${parsed.providerType.name}/$acct${parsed.remoteId}/$effectiveSize"
         }
-
-        val acct = if (configId > 0L) "$configId/" else ""
-
-        // No server preview URL. For videos on path-based stores (SMB/NFS/WebDAV) we can
-        // still decode a poster frame locally from the original stream. Serve that instead
-        // of returning null (which drops through to loaders that can only fail to decode).
-        if (url.isBlank()) {
-            if (typeParam == null && effectiveSize != "original") {
-                val size = if (effectiveSize == "thumbnail") ThumbnailSize.THUMBNAIL else ThumbnailSize.PREVIEW
-                return ModelLoader.LoadData(
-                    ObjectKey("${providerType.name}/$acct$remoteId/videoframe/$effectiveSize"),
-                    CloudVideoFrameFetcher(provider, remoteId, size)
-                )
-            }
-            return null
-        }
-
-        val authHeaders = provider.getAuthHeaders()
-        val cacheKey = if (typeParam != null) "${providerType.name}/$acct$typeParam/$remoteId"
-            else "${providerType.name}/$acct$remoteId/$effectiveSize"
-
-        val offlineKey = CloudMediaCache.keyFor(providerType, configId, remoteId, effectiveSize, typeParam)
         return ModelLoader.LoadData(
-            ObjectKey(cacheKey),
-            CloudOkHttpFetcher(url, authHeaders, offlineKey)
+            ObjectKey("v$CLOUD_GLIDE_SOURCE_VERSION/$cacheKey"),
+            CloudProviderResolvingFetcher(registry, parsed, effectiveSize)
         )
     }
 
@@ -110,17 +92,133 @@ class CloudGlideModelLoader : ModelLoader<Uri, InputStream> {
     }
 }
 
+private const val CLOUD_PROVIDER_INIT_TIMEOUT_MILLIS = 35_000L
+private const val CLOUD_GLIDE_SOURCE_VERSION = 2
+
+internal fun isClearlyTruncatedJpeg(contentType: String?, bytes: ByteArray): Boolean {
+    val isJpeg = contentType?.startsWith("image/jpeg", ignoreCase = true) == true ||
+        bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte()
+    if (!isJpeg) return false
+    return (1 until bytes.size).none { index ->
+        bytes[index - 1] == 0xFF.toByte() && bytes[index] == 0xD9.toByte()
+    }
+}
+
+internal suspend fun awaitInitializedRemoteProvider(
+    registry: ProviderRegistry,
+    providerType: ProviderType,
+    configId: Long,
+    timeoutMillis: Long = CLOUD_PROVIDER_INIT_TIMEOUT_MILLIS
+): RemoteMediaProvider? = withTimeoutOrNull(timeoutMillis) {
+    if (configId <= 0L) {
+        registry.resolveRemote(providerType, configId) ?: registry.connectionStates
+            .map { registry.resolveRemote(providerType, configId) }
+            .first { it != null }
+    } else {
+        registry.connectionStates
+            .map { states -> states[configId] to registry.resolveRemote(providerType, configId) }
+            .first { (state, _) ->
+                state == ConnectionState.ERROR || state == ConnectionState.CONNECTED
+            }
+            .second
+    }
+}
+
+private fun createCloudDataFetcher(
+    provider: RemoteMediaProvider,
+    parsed: CloudUri,
+    effectiveSize: String
+): DataFetcher<InputStream>? {
+    val url = when (parsed.typeParam) {
+        "person" -> (provider as? PeopleCapableProvider)?.getPersonThumbnailUrl(parsed.remoteId)
+            ?: return null
+        else -> when (effectiveSize) {
+            "thumbnail" -> provider.getThumbnailUrl(parsed.remoteId, ThumbnailSize.THUMBNAIL, parsed.fileId)
+            "preview" -> provider.getThumbnailUrl(parsed.remoteId, ThumbnailSize.PREVIEW, parsed.fileId)
+            "original" -> provider.getOriginalUrl(parsed.remoteId)
+            else -> provider.getThumbnailUrl(parsed.remoteId, ThumbnailSize.PREVIEW, parsed.fileId)
+        }
+    }
+    if (url.isBlank()) {
+        if (parsed.typeParam == null && effectiveSize != "original") {
+            val size = if (effectiveSize == "thumbnail") ThumbnailSize.THUMBNAIL else ThumbnailSize.PREVIEW
+            return CloudVideoFrameFetcher(provider, parsed.remoteId, size)
+        }
+        return null
+    }
+    return CloudOkHttpFetcher(
+        url,
+        provider.getAuthHeaders(),
+        CloudMediaCache.keyFor(
+            parsed.providerType,
+            parsed.configId,
+            parsed.remoteId,
+            effectiveSize,
+            parsed.typeParam
+        )
+    )
+}
+
+private class CloudProviderResolvingFetcher(
+    private val registry: ProviderRegistry,
+    private val parsed: CloudUri,
+    private val effectiveSize: String
+) : DataFetcher<InputStream> {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    @Volatile
+    private var delegate: DataFetcher<InputStream>? = null
+
+    override fun loadData(priority: Priority, callback: DataFetcher.DataCallback<in InputStream>) {
+        scope.launch {
+            val provider = awaitInitializedRemoteProvider(
+                registry,
+                parsed.providerType,
+                parsed.configId
+            )
+            if (provider == null) {
+                if (isActive) callback.onLoadFailed(
+                    IllegalStateException("Cloud provider did not initialize for ${parsed.providerType}/${parsed.configId}")
+                )
+                return@launch
+            }
+            val fetcher = createCloudDataFetcher(provider, parsed, effectiveSize)
+            if (fetcher == null) {
+                if (isActive) callback.onLoadFailed(NoPreviewAvailableException(parsed.remoteId))
+                return@launch
+            }
+            delegate = fetcher
+            if (isActive) fetcher.loadData(priority, callback) else fetcher.cancel()
+        }
+    }
+
+    override fun cleanup() {
+        scope.cancel()
+        delegate?.cleanup()
+    }
+
+    override fun cancel() {
+        scope.cancel()
+        delegate?.cancel()
+    }
+
+    override fun getDataClass(): Class<InputStream> = InputStream::class.java
+    override fun getDataSource(): DataSource = DataSource.REMOTE
+}
+
 /**
  * Glide DataFetcher that uses the shared OkHttpClient from [CloudFetcherRegistryHolder],
  * inheriting its TLS configuration (insecure on debug/staging).
  */
-private class CloudOkHttpFetcher(
+internal class CloudOkHttpFetcher(
     private val url: String,
     private val authHeaders: Map<String, String>,
-    private val offlineKey: String
+    private val offlineKey: String,
+    private val logDebug: (String) -> Unit = CloudTrace::d,
+    private val logWarning: (String) -> Unit = { CloudTrace.w(it) }
 ) : DataFetcher<InputStream> {
 
-    private var call: okhttp3.Call? = null
+    private var call: Call? = null
 
     override fun loadData(priority: Priority, callback: DataFetcher.DataCallback<in InputStream>) {
         val client = CloudFetcherRegistryHolder.okHttpClient ?: OkHttpClient()
@@ -130,43 +228,59 @@ private class CloudOkHttpFetcher(
 
         call = client.newCall(requestBuilder.build())
         try {
-            CloudTrace.d("Glide.fetch -> GET $url")
+            logDebug("Glide.fetch -> GET $url")
             val start = System.nanoTime()
-            call!!.execute().use { response ->
-                if (!response.isSuccessful) {
-                    CloudTrace.w("Glide.fetch -> HTTP ${response.code} for $url")
-                    callback.onLoadFailed(Exception("HTTP ${response.code}: ${response.message}"))
-                    return
+            call!!.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    callback.onLoadFailed(e)
                 }
-                val contentType = response.body.contentType()?.toString()
-                    ?: response.header("Content-Type")
-                val bytes = response.body.bytes()
-                if (bytes.isEmpty()) {
-                    callback.onLoadFailed(Exception("Empty response body (Content-Type=$contentType)"))
-                    return
+
+                override fun onResponse(call: Call, response: Response) {
+                    try {
+                        response.use {
+                            if (!response.isSuccessful) {
+                                logWarning("Glide.fetch -> HTTP ${response.code} for $url")
+                                callback.onLoadFailed(Exception("HTTP ${response.code}: ${response.message}"))
+                                return
+                            }
+                            val contentType = response.body.contentType()?.toString()
+                                ?: response.header("Content-Type")
+                            val bytes = response.body.bytes()
+                            if (bytes.isEmpty()) {
+                                callback.onLoadFailed(Exception("Empty response body (Content-Type=$contentType)"))
+                                return
+                            }
+                            if (isClearlyTruncatedJpeg(contentType, bytes)) {
+                                callback.onLoadFailed(Exception("Truncated JPEG response"))
+                                return
+                            }
+                            logDebug("Glide.fetch <- ${CloudTrace.bytes(bytes.size.toLong())} ($contentType) in ${(System.nanoTime() - start) / 1_000_000}ms for $url")
+                            // Servers sometimes answer a preview request with a non-image payload
+                            // (HTML login/redirect page, JSON error, or an SVG mimetype icon when
+                            // no real preview exists). Feeding those bytes to Glide produces a long
+                            // chain of useless decode failures, so reject them up front with a
+                            // descriptive error and log what was actually returned.
+                            val isImage = contentType?.startsWith("image/", ignoreCase = true) == true
+                            if (!isImage) {
+                                val snippet = String(bytes.copyOf(minOf(bytes.size, 180)))
+                                    .replace('\n', ' ').replace('\r', ' ').trim()
+                                Log.w(
+                                    "CloudFetcher",
+                                    "Non-image preview response: url=$url contentType=$contentType " +
+                                        "bytes=${bytes.size} snippet=\"$snippet\""
+                                )
+                                callback.onLoadFailed(
+                                    Exception("Server returned non-image content (Content-Type=$contentType)")
+                                )
+                                return
+                            }
+                            callback.onDataReady(ByteArrayInputStream(bytes))
+                        }
+                    } catch (e: Exception) {
+                        callback.onLoadFailed(e)
+                    }
                 }
-                CloudTrace.d("Glide.fetch <- ${CloudTrace.bytes(bytes.size.toLong())} ($contentType) in ${(System.nanoTime() - start) / 1_000_000}ms for $url")
-                // Servers sometimes answer a preview request with a non-image payload
-                // (HTML login/redirect page, JSON error, or an SVG mimetype icon when
-                // no real preview exists). Feeding those bytes to Glide produces a long
-                // chain of useless decode failures, so reject them up front with a
-                // descriptive error and log what was actually returned.
-                val isImage = contentType?.startsWith("image/", ignoreCase = true) == true
-                if (!isImage) {
-                    val snippet = String(bytes.copyOf(minOf(bytes.size, 180)))
-                        .replace('\n', ' ').replace('\r', ' ').trim()
-                    Log.w(
-                        "CloudFetcher",
-                        "Non-image preview response: url=$url contentType=$contentType " +
-                            "bytes=${bytes.size} snippet=\"$snippet\""
-                    )
-                    callback.onLoadFailed(
-                        Exception("Server returned non-image content (Content-Type=$contentType)")
-                    )
-                    return
-                }
-                callback.onDataReady(ByteArrayInputStream(bytes))
-            }
+            })
         } catch (e: Exception) {
             callback.onLoadFailed(e)
         }

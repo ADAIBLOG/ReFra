@@ -23,6 +23,7 @@ import com.dot.gallery.feature_node.presentation.trashed.components.TrashDialogA
 import com.dot.gallery.feature_node.presentation.trashed.components.resolveTrashDialogAction
 import com.dot.gallery.feature_node.presentation.util.rememberActivityResult
 import com.dot.gallery.feature_node.presentation.util.rememberAppBottomSheetState
+import com.dot.gallery.feature_node.presentation.util.toastError
 import kotlinx.coroutines.launch
 
 @Composable
@@ -39,6 +40,9 @@ fun <T : Media> TrashButton(
     var shouldMoveToTrash by rememberSaveable { mutableStateOf(true) }
     val state = rememberAppBottomSheetState()
     val scope = rememberCoroutineScope()
+    val deletionError = toastError(
+        stringResource(if (media.isCloud) R.string.cloud_media_delete_failed else R.string.error_toast)
+    )
     val trashEnabled by rememberTrashEnabled()
     val effectiveAction = resolveTrashDialogAction(
         trashRequested = shouldMoveToTrash && !media.isEncrypted,
@@ -99,7 +103,11 @@ fun <T : Media> TrashButton(
             } else {
                 handler.deleteMedia(result, it)
             }
-            if (mutationResult == MediaMutationResult.COMPLETED) onTrashConfirmed()
+            when (mutationResult) {
+                MediaMutationResult.COMPLETED -> onTrashConfirmed()
+                MediaMutationResult.FAILED -> deletionError.show()
+                MediaMutationResult.REQUEST_LAUNCHED -> Unit
+            }
         }
     }
 }
