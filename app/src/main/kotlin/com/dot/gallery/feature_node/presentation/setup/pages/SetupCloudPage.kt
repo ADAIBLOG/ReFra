@@ -266,6 +266,7 @@ private fun capabilityLabel(capability: ProviderCapability): Int? = when (capabi
     ProviderCapability.OCR -> R.string.setup_cap_ocr
     ProviderCapability.ARCHIVE -> R.string.setup_cap_archive
     ProviderCapability.MEMORIES -> R.string.setup_cap_memories
+    ProviderCapability.TAGS -> R.string.setup_cap_tags
     // Selection-only capabilities, not shown during setup.
     ProviderCapability.FAVORITE -> null
     ProviderCapability.TRASH -> null

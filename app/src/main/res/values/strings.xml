@@ -876,6 +876,15 @@
     <string name="smart_features_include_ignored_albums">Include ignored albums</string>
     <string name="smart_features_include_ignored_albums_summary">Include timeline-hidden media in Smart Features and Smart Search. Changing this starts a full refresh; locked albums stay private.</string>
     <string name="smart_features_include_ignored_albums_scan_running">Unavailable while a Smart Scan is running. Wait for the scan to finish or cancel it in Smart Scan manager.</string>
+    <string name="smart_features_cloud_section">Cloud libraries</string>
+    <string name="smart_features_provider_smart_search">Server-side smart search</string>
+    <string name="smart_features_provider_smart_search_summary">Ask connected servers with their own AI (e.g. Immich) to answer searches instead of re-indexing cloud media on this device</string>
+    <string name="smart_features_index_on_device">Index %1$s on this device</string>
+    <string name="smart_features_index_on_device_summary">Downloads a thumbnail per item and runs on-device AI. Off: this provider\'s media is skipped by Smart Scan.</string>
+    <string name="smart_features_index_on_device_delegated_summary">Off: %1$s answers searches itself. On: also index locally for offline and cross-library results.</string>
+    <string name="smart_features_cloud_indexing_summary">Server-side search and on-device indexing for connected libraries</string>
+    <string name="smart_features_cloud_indexing_description">Connected libraries with their own AI can answer searches on the server. On-device indexing downloads a thumbnail per item and runs local AI, which also covers offline and cross-library results.</string>
+    <string name="smart_features_index_on_device_section">Index on this device</string>
     <string name="smart_scan_stage_number">Stage %1$d of %2$d</string>
     <string name="smart_scan_stage_items">%1$d of %2$d items · %3$d failed · %4$d skipped</string>
     <string name="smart_scan_preparing_stage">Preparing this stage…</string>
@@ -1573,6 +1582,7 @@
     <string name="cloud_cap_text_search">Search</string>
     <string name="cloud_cap_ocr">OCR</string>
     <string name="cloud_cap_archive">Archive</string>
+    <string name="cloud_cap_tags">Tags</string>
     <string name="cloud_cap_memories">Memories</string>
     <string name="cloud_setup_help">How to connect</string>
     <string name="cloud_wizard_step">Step %1$d of %2$d</string>
@@ -2136,6 +2146,7 @@
     <string name="setup_cap_text_search">Text search</string>
     <string name="setup_cap_share_link">Shared links</string>
     <string name="setup_cap_ocr">Text recognition</string>
+    <string name="setup_cap_tags">Tags</string>
     <string name="setup_cap_archive">Archive</string>
     <string name="setup_cap_memories">Memories</string>
 

@@ -21,6 +21,7 @@ import com.dot.gallery.cloud.immich.data.dto.ImmichServerAboutDto
 import com.dot.gallery.cloud.immich.data.dto.ImmichServerStorageDto
 import com.dot.gallery.cloud.immich.data.dto.ImmichSharedLinkCreateDto
 import com.dot.gallery.cloud.immich.data.dto.ImmichSharedLinkDto
+import com.dot.gallery.cloud.immich.data.dto.ImmichTagDto
 import com.dot.gallery.cloud.immich.data.dto.ImmichUserDto
 import com.dot.gallery.cloud.immich.data.dto.ImmichValidateTokenDto
 import okhttp3.MultipartBody
@@ -133,6 +134,10 @@ interface ImmichApiService {
     // Search
     @POST("api/search/smart")
     suspend fun smartSearch(@Body searchDto: ImmichSearchDto): Response<ImmichSearchResponseDto>
+
+    // Tags
+    @GET("api/tags")
+    suspend fun getTags(): Response<List<ImmichTagDto>>
 
     @POST("api/search/metadata")
     suspend fun metadataSearch(@Body body: Map<String, @JvmSuppressWildcards Any>): Response<ImmichSearchResponseDto>

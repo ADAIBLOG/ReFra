@@ -565,6 +565,7 @@ private fun capabilityLabelRes(capability: ProviderCapability): Int? = when (cap
     ProviderCapability.OCR -> R.string.cloud_cap_ocr
     ProviderCapability.ARCHIVE -> R.string.cloud_cap_archive
     ProviderCapability.MEMORIES -> R.string.cloud_cap_memories
+    ProviderCapability.TAGS -> R.string.cloud_cap_tags
     // Selection-only capabilities, not surfaced as account chips.
     ProviderCapability.FAVORITE -> null
     ProviderCapability.TRASH -> null

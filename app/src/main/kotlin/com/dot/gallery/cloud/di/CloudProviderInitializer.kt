@@ -15,8 +15,12 @@ import com.dot.gallery.cloud.core.ProviderInstanceFactory
 import com.dot.gallery.cloud.core.ProviderRegistry
 import com.dot.gallery.cloud.core.ProviderType
 import com.dot.gallery.cloud.core.capabilities.RemoteMediaProvider
+import com.dot.gallery.cloud.core.capabilities.TagsCapableProvider
 import com.dot.gallery.cloud.data.dao.CloudMediaDao
 import com.dot.gallery.cloud.data.dao.CloudServerConfigDao
+import com.dot.gallery.cloud.data.dao.CloudTagDao
+import com.dot.gallery.cloud.data.entity.CloudMediaTagEntity
+import com.dot.gallery.cloud.data.entity.CloudTagEntity
 import com.dot.gallery.cloud.data.repository.CloudRepository
 import com.dot.gallery.cloud.network.ServerUrlResolver
 import com.dot.gallery.cloud.offline.OfflineModeManager
@@ -102,6 +106,7 @@ class CloudProviderInitializer @Inject constructor(
     private val configDao: CloudServerConfigDao,
     private val credentialEncryptor: CredentialEncryptor,
     private val cloudMediaDao: CloudMediaDao,
+    private val cloudTagDao: CloudTagDao,
     private val cloudRepository: CloudRepository,
     private val urlResolver: ServerUrlResolver,
     private val offlineModeManager: OfflineModeManager,
@@ -169,6 +174,38 @@ class CloudProviderInitializer @Inject constructor(
                 printDebug("CloudProviderInitializer: Asset prefetch failed for $label: ${e.message}")
             } finally {
                 indexProgressManager.finish(configId)
+            }
+        }
+        prefetchScope.launch {
+            if (!shouldStartCloudIndex(offlineModeManager.effectiveOfflineNow)) return@launch
+            val tagsProvider = provider as? TagsCapableProvider ?: return@launch
+            try {
+                val tags = tagsProvider.getTags().getOrThrow()
+                val now = System.currentTimeMillis()
+                val tagEntities = tags.map { tag ->
+                    CloudTagEntity(
+                        serverConfigId = configId,
+                        providerType = provider.providerType,
+                        tagId = tag.tagId,
+                        name = tag.name,
+                        value = tag.value,
+                        color = tag.color,
+                        lastSyncedAt = now
+                    )
+                }
+                val links = ArrayList<CloudMediaTagEntity>()
+                for (tag in tags) {
+                    val remoteIds = tagsProvider.getTagAssetIds(tag.tagId).getOrDefault(emptyList())
+                    remoteIds.mapTo(links) { remoteId ->
+                        CloudMediaTagEntity(configId, provider.providerType, tag.tagId, remoteId)
+                    }
+                }
+                cloudTagDao.replaceForAccount(configId, tagEntities, links)
+                printDebug("CloudProviderInitializer: Synced ${tags.size} tags for $label")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                printDebug("CloudProviderInitializer: Tag sync failed for $label: ${e.message}")
             }
         }
         prefetchScope.launch {

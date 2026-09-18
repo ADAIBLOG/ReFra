@@ -38,7 +38,9 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.dot.gallery.cloud.core.ProviderType
 import com.dot.gallery.core.Constants.albumCellsList
 import com.dot.gallery.core.Constants.cellsList
 import com.dot.gallery.core.Constants.mosaicColumnsList
@@ -356,12 +358,46 @@ object Settings {
 
     object SmartFeatures {
         private val INCLUDE_IGNORED_ALBUMS = booleanPreferencesKey("smart_features_include_ignored_albums")
+        private val INDEX_ON_DEVICE_PROVIDERS = stringSetPreferencesKey("smart_features_index_on_device_providers")
+        private val PROVIDER_SMART_SEARCH = booleanPreferencesKey("smart_features_provider_smart_search")
 
         fun includeIgnoredAlbums(context: Context): Flow<Boolean> =
             context.activeDataStore.data.map { it[INCLUDE_IGNORED_ALBUMS] ?: false }
 
         suspend fun setIncludeIgnoredAlbums(context: Context, include: Boolean) {
             context.activeDataStore.edit { it[INCLUDE_IGNORED_ALBUMS] = include }
+        }
+
+        /**
+         * Provider type names (ProviderType.name) whose cached cloud media is included in
+         * the on-device Smart Scan (search embeddings + face detection). Empty by default:
+         * providers that declare SMART_SEARCH are delegated to the server instead, and
+         * indexing remote media on-device costs a thumbnail download per asset.
+         */
+        fun indexOnDeviceProviders(context: Context): Flow<Set<String>> =
+            context.activeDataStore.data.map { it[INDEX_ON_DEVICE_PROVIDERS] ?: emptySet() }
+
+        suspend fun setIndexOnDeviceProvider(
+            context: Context,
+            provider: ProviderType,
+            enabled: Boolean
+        ) {
+            context.activeDataStore.edit { prefs ->
+                val current = prefs[INDEX_ON_DEVICE_PROVIDERS] ?: emptySet()
+                prefs[INDEX_ON_DEVICE_PROVIDERS] =
+                    if (enabled) current + provider.name else current - provider.name
+            }
+        }
+
+        /**
+         * Whether text/image queries are delegated to connected servers that declare
+         * SMART_SEARCH (Immich CLIP search). Default on.
+         */
+        fun providerSmartSearch(context: Context): Flow<Boolean> =
+            context.activeDataStore.data.map { it[PROVIDER_SMART_SEARCH] ?: true }
+
+        suspend fun setProviderSmartSearch(context: Context, enabled: Boolean) {
+            context.activeDataStore.edit { it[PROVIDER_SMART_SEARCH] = enabled }
         }
     }
 

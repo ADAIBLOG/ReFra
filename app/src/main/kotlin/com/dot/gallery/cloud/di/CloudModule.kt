@@ -13,6 +13,7 @@ import com.dot.gallery.cloud.data.dao.CloudDeleteLocalPrefDao
 import com.dot.gallery.cloud.data.dao.CloudMediaDao
 import com.dot.gallery.cloud.data.dao.CloudOfflinePinDao
 import com.dot.gallery.cloud.data.dao.CloudServerConfigDao
+import com.dot.gallery.cloud.data.dao.CloudTagDao
 import com.dot.gallery.cloud.data.dao.CloudUploadPrefDao
 import com.dot.gallery.cloud.data.dao.DetectedFaceDao
 import com.dot.gallery.cloud.data.dao.PersonDao
@@ -86,10 +87,16 @@ abstract class CloudModule {
 
         @Provides
         @Singleton
+        fun provideCloudTagDao(database: InternalDatabase): CloudTagDao =
+            database.getCloudTagDao()
+
+        @Provides
+        @Singleton
         fun provideCloudRepository(
             registry: ProviderRegistry,
             cloudMediaDao: CloudMediaDao,
+            cloudTagDao: CloudTagDao,
             urlResolver: ServerUrlResolver
-        ): CloudRepository = CloudRepositoryImpl(registry, cloudMediaDao, urlResolver)
+        ): CloudRepository = CloudRepositoryImpl(registry, cloudMediaDao, cloudTagDao, urlResolver)
     }
 }

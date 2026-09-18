@@ -6,6 +6,9 @@ import com.bumptech.glide.Glide
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dot.gallery.R
+import com.dot.gallery.cloud.core.CloudUri
+import com.dot.gallery.cloud.data.repository.CloudRepository
+import com.dot.gallery.cloud.offline.OfflineModeManager
 import com.dot.gallery.core.MediaDistributor
 import com.dot.gallery.core.Settings
 import com.dot.gallery.core.ml.ModelGroup
@@ -21,7 +24,9 @@ import com.dot.gallery.feature_node.domain.repository.MediaRepository
 import com.dot.gallery.feature_node.domain.util.MediaGroupType
 import com.dot.gallery.feature_node.domain.util.MediaOrder
 import com.dot.gallery.feature_node.domain.util.classifyGroupType
+import com.dot.gallery.feature_node.domain.util.cloudGroupKey
 import com.dot.gallery.feature_node.domain.util.getUri
+import com.dot.gallery.feature_node.domain.util.isCloud
 import com.dot.gallery.feature_node.domain.util.groupKey
 import com.dot.gallery.feature_node.presentation.help.data.HelpSearchIndex
 import com.dot.gallery.feature_node.presentation.help.data.HelpSearchItem
@@ -40,11 +45,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
@@ -81,6 +88,19 @@ internal fun <T> dateOrderedSearchResults(
     timestamp: (T) -> Long,
 ): List<T> = results.sortedByDescending(timestamp)
 
+/**
+ * Scores for ordered provider hits that carry no relevance value of their own
+ * (e.g. Immich smart search): the first hit scores 0.95 and the last 0.5, so
+ * remote results interleave with local cosine hits without outranking exact
+ * local matches.
+ */
+internal fun <T> rankedRemoteHits(remote: List<T>): List<Pair<Float, T>> =
+    remote.mapIndexed { index, item ->
+        val score = if (remote.size <= 1) 0.95f
+        else 0.95f - 0.45f * index / (remote.size - 1)
+        score to item
+    }
+
 internal fun <T, K> smartSearchMediaPool(
     timelineMedia: List<T>,
     completeLocalMedia: List<T>,
@@ -105,6 +125,8 @@ class SearchViewModel @Inject constructor(
     private val searchHelper: SearchHelper,
     repository: MediaRepository,
     modelManager: ModelManager,
+    private val cloudRepository: CloudRepository,
+    private val offlineModeManager: OfflineModeManager,
     @param:ApplicationContext
     private val context: Context
 ) : ViewModel() {
@@ -484,15 +506,20 @@ class SearchViewModel @Inject constructor(
             )
             try {
                 val uri = media.getUri()
-                val bitmap = Glide.with(context.applicationContext)
-                    .asBitmap()
-                    .load(uri)
-                    .centerCrop()
-                    .override(VISUAL_SEARCH_INPUT_SIZE, VISUAL_SEARCH_INPUT_SIZE)
-                    .submit()
-                    .get()
+                // A cloud item can be delegated to its own server ("more like this") instead of
+                // needing the local CLIP model at all.
+                val allowRemoteSearch = Settings.SmartFeatures.providerSmartSearch(context).first() &&
+                    !offlineModeManager.effectiveOfflineNow
+                val remoteHits = CloudUri.parse(uri.toString())
+                    ?.takeIf { allowRemoteSearch }
+                    ?.let { ref ->
+                        cloudRepository.smartSearchByAsset(ref.providerType, ref.configId, ref.remoteId)
+                            .getOrNull()
+                            ?.mapNotNull { it as? Media.UriMedia }
+                            ?.filterNot { it.id == media.id }
+                    }
 
-                if (!searchHelper.isAvailable) {
+                if (remoteHits == null && !searchHelper.isAvailable) {
                     _searchResultsState.tryEmit(
                         SearchResultsState(
                             hasSearched = true,
@@ -503,33 +530,47 @@ class SearchViewModel @Inject constructor(
                     )
                     return@launch
                 }
-                searchHelper.setupVisionSession().use { session ->
-                    val imageEmbedding = searchHelper.getImageEmbedding(session, bitmap)
-                    val searchResultsPair = searchHelper.sortByCosineDistance(
-                        searchEmbedding = imageEmbedding,
-                        imageEmbeddingsList = imageRecords.value.map { it.embedding },
-                        imageIdxList = imageRecords.value.map { it.id }
-                    )
-                    val allMediaList = allMedia.value.media
-                    val results = searchResultsPair.mapNotNull { (id, score) ->
-                        if (id == media.id) return@mapNotNull null
-                        val m = allMediaList.find { it.id == id }
-                        if (m != null) score to m else null
-                    }
-                    val (mediaState, dateMediaState) = mapRelevanceResults(
-                        currentlySearchable(results.map { it.second })
-                    )
-                    _searchResultsState.tryEmit(
-                        SearchResultsState(
-                            hasSearched = true,
-                            isSearching = false,
-                            isRelevanceSearch = true,
-                            progress = 1f,
-                            results = mediaState,
-                            dateResults = dateMediaState
+                val localHits = if (searchHelper.isAvailable) {
+                    val bitmap = Glide.with(context.applicationContext)
+                        .asBitmap()
+                        .load(uri)
+                        .centerCrop()
+                        .override(VISUAL_SEARCH_INPUT_SIZE, VISUAL_SEARCH_INPUT_SIZE)
+                        .submit()
+                        .get()
+                    searchHelper.setupVisionSession().use { session ->
+                        val imageEmbedding = searchHelper.getImageEmbedding(session, bitmap)
+                        val searchResultsPair = searchHelper.sortByCosineDistance(
+                            searchEmbedding = imageEmbedding,
+                            imageEmbeddingsList = imageRecords.value.map { it.embedding },
+                            imageIdxList = imageRecords.value.map { it.id }
                         )
+                        val allMediaList = allMedia.value.media
+                        searchResultsPair.mapNotNull { (id, score) ->
+                            if (id == media.id) return@mapNotNull null
+                            val m = allMediaList.find { it.id == id }
+                            if (m != null) score to m else null
+                        }
+                    }
+                } else emptyList()
+                val results = mutableListOf<Pair<Float, Media.UriMedia>>()
+                results.mergeWithHighestScore(localHits)
+                val resolvedRemote = remoteHits?.let { resolveRemoteHits(it, allMedia.value.media) }
+                resolvedRemote?.let { results.mergeWithHighestScore(rankedRemoteHits(it)) }
+                val remoteById = resolvedRemote?.associateBy { it.id }.orEmpty()
+                val (mediaState, dateMediaState) = mapRelevanceResults(
+                    currentlySearchable(results.map { it.second }, remoteById)
+                )
+                _searchResultsState.tryEmit(
+                    SearchResultsState(
+                        hasSearched = true,
+                        isSearching = false,
+                        isRelevanceSearch = true,
+                        progress = 1f,
+                        results = mediaState,
+                        dateResults = dateMediaState
                     )
-                }
+                )
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -548,9 +589,28 @@ class SearchViewModel @Inject constructor(
         }
     }
 
-    private fun currentlySearchable(media: List<Media.UriMedia>): List<Media.UriMedia> {
+    /**
+     * Remote hits that are the provider's copy of a local file resolve to the local
+     * item: timeline grouping folds those copies into `cloudBackups`, so a hit kept
+     * under its own cloud id is absent from `media`/`searchableMediaIds` and would
+     * be filtered out of the result state entirely.
+     */
+    private fun resolveRemoteHits(
+        remoteHits: List<Media.UriMedia>,
+        pool: List<Media.UriMedia>
+    ): List<Media.UriMedia> {
+        if (remoteHits.isEmpty()) return remoteHits
+        val localByGroupKey = HashMap<String, Media.UriMedia>(pool.size)
+        for (item in pool) if (!item.isCloud) localByGroupKey.putIfAbsent(item.cloudGroupKey, item)
+        return remoteHits.map { localByGroupKey[it.cloudGroupKey] ?: it }
+    }
+
+    private fun currentlySearchable(
+        media: List<Media.UriMedia>,
+        fallbackById: Map<Long, Media.UriMedia> = emptyMap()
+    ): List<Media.UriMedia> {
         val currentMedia = allMedia.value.media.associateBy { it.id }
-        return media.mapNotNull { currentMedia[it.id] }
+        return media.mapNotNull { currentMedia[it.id] ?: fallbackById[it.id] }
     }
 
     private suspend fun mapRelevanceResults(
@@ -827,6 +887,13 @@ class SearchViewModel @Inject constructor(
                 )
                 return@launch
             }
+            // Delegate to connected servers that run their own ML (e.g. Immich CLIP
+            // search) while local inference runs, so remote hits overlap the local work.
+            val allowRemoteSearch = Settings.SmartFeatures.providerSmartSearch(context).first() &&
+                !offlineModeManager.effectiveOfflineNow
+            val remoteSearch = if (allowRemoteSearch) {
+                async { cloudRepository.smartSearch(query) }
+            } else null
             val metadataMatchIds = metadata.value.metadata
                 .filter { it.searchableText.contains(query, ignoreCase = true) }
                 .mapTo(HashSet()) { it.mediaId }
@@ -834,6 +901,13 @@ class SearchViewModel @Inject constructor(
                 val filteredMedia = allMedia.filter { it.id in metadataMatchIds }
                 results.mergeWithHighestScore(
                     filteredMedia.map { 1f to it }
+                )
+            }
+            // Server tags synced into Room (e.g. Immich tags) act as metadata matches.
+            val tagMediaIds = cloudRepository.findTagMediaIds(query).toHashSet()
+            if (tagMediaIds.isNotEmpty()) {
+                results.mergeWithHighestScore(
+                    allMedia.filter { it.id in tagMediaIds }.map { 1f to it }
                 )
             }
             if (searchHelper.isAvailable) {
@@ -867,9 +941,14 @@ class SearchViewModel @Inject constructor(
             }
             val fuzzySearchResults = allMedia.parseFuzzySearch(query)
             results.mergeWithHighestScore(fuzzySearchResults)
-            val (mediaState, dateMediaState) = mapRelevanceResults(
-                currentlySearchable(results.map { it.second })
-            )
+            val remoteHits = remoteSearch?.await()?.getOrNull()
+                ?.mapNotNull { it as? Media.UriMedia }
+                .orEmpty()
+            val resolvedRemoteHits = resolveRemoteHits(remoteHits, allMedia)
+            results.mergeWithHighestScore(rankedRemoteHits(resolvedRemoteHits))
+            val remoteById = resolvedRemoteHits.associateBy { it.id }
+            val mergedMedia = currentlySearchable(results.map { it.second }, remoteById)
+            val (mediaState, dateMediaState) = mapRelevanceResults(mergedMedia)
             _searchResultsState.tryEmit(
                 SearchResultsState(
                     hasSearched = true,

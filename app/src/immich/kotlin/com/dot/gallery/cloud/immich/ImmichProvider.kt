@@ -34,6 +34,8 @@ import com.dot.gallery.cloud.core.capabilities.RemoteMediaProvider
 import com.dot.gallery.cloud.core.capabilities.RemoteNameConflictPolicy
 import com.dot.gallery.cloud.core.capabilities.ShareLinkCapableProvider
 import com.dot.gallery.cloud.core.capabilities.SmartSearchCapableProvider
+import com.dot.gallery.cloud.core.capabilities.CloudTagInfo
+import com.dot.gallery.cloud.core.capabilities.TagsCapableProvider
 import com.dot.gallery.cloud.data.dao.CloudMediaDao
 import com.dot.gallery.cloud.data.entity.CloudMediaEntity
 import com.dot.gallery.cloud.image.CloudMediaFetcher
@@ -130,6 +132,7 @@ class ImmichProvider @Inject constructor(
     MapCapableProvider,
     PeopleCapableProvider,
     SmartSearchCapableProvider,
+    TagsCapableProvider,
     ShareLinkCapableProvider,
     RemoteAlbumWriteProvider,
     MemoriesCapableProvider,
@@ -191,7 +194,8 @@ class ImmichProvider @Inject constructor(
         ProviderCapability.ARCHIVE,
         ProviderCapability.MEMORIES,
         ProviderCapability.FAVORITE,
-        ProviderCapability.TRASH
+        ProviderCapability.TRASH,
+        ProviderCapability.TAGS
     )
 
     override fun configure(config: CloudServerConfig) {
@@ -751,18 +755,88 @@ class ImmichProvider @Inject constructor(
 
     // === Smart Search ===
 
-    override suspend fun smartSearch(query: String): Result<List<Media>> {
+    override suspend fun smartSearch(query: String): Result<List<Media>> =
+        runSmartSearch(ImmichSearchDto(query = query))
+
+    override suspend fun smartSearchByAsset(remoteId: String): Result<List<Media>> =
+        runSmartSearch(ImmichSearchDto(queryAssetId = remoteId), excludeRemoteId = remoteId)
+
+    private suspend fun runSmartSearch(
+        dto: ImmichSearchDto,
+        excludeRemoteId: String? = null
+    ): Result<List<Media>> {
         return try {
             val configId = requireConfigId()
-            val response = requireApi().smartSearch(ImmichSearchDto(query = query))
+            val response = requireApi().smartSearch(dto)
             if (response.isSuccessful) {
-                val media = response.body()?.assets?.items
-                    ?.map { it.toCloudMediaEntity(configId, baseUrl).toUriMedia() }
+                val entities = response.body()?.assets?.items
+                    ?.map { it.toCloudMediaEntity(configId, baseUrl) }
+                    ?.filter { it.remoteId != excludeRemoteId }
                     ?: emptyList()
-                Result.success(media)
+                // Cache the hits so they render through the normal cloud-media pipeline
+                // (thumbnails, viewer, search grid) even before the next asset prefetch.
+                if (entities.isNotEmpty()) cloudMediaDao.insertAll(entities)
+                Result.success(entities.map { it.toUriMedia() })
             } else {
                 Result.failure(Exception("Smart search failed: ${response.code()}"))
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // === Tags ===
+
+    override suspend fun getTags(): Result<List<CloudTagInfo>> {
+        return try {
+            val response = requireApi().getTags()
+            if (response.isSuccessful) {
+                Result.success(
+                    response.body().orEmpty().map { dto ->
+                        CloudTagInfo(
+                            tagId = dto.id,
+                            name = dto.name,
+                            value = dto.value,
+                            color = dto.color
+                        )
+                    }
+                )
+            } else {
+                Result.failure(Exception("Failed to fetch tags: ${response.code()}"))
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun getTagAssetIds(tagId: String): Result<List<String>> {
+        return try {
+            val ids = mutableListOf<String>()
+            var page = 1
+            while (true) {
+                val body = mapOf<String, Any>(
+                    "tagIds" to listOf(tagId),
+                    "page" to page,
+                    "size" to 1000
+                )
+                val response = requireApi().searchAssets(body)
+                if (!response.isSuccessful) {
+                    return Result.failure(Exception("Tag asset search failed: ${response.code()}"))
+                }
+                val assets = response.body()?.assets
+                ids += assets?.items?.map { it.id }.orEmpty()
+                // nextPage is the page to request next; null means the listing is done.
+                val next = assets?.nextPage?.toIntOrNull()
+                if (next == null || assets?.items.isNullOrEmpty()) break
+                page = next
+            }
+            Result.success(ids)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(e)
         }

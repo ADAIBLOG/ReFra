@@ -125,6 +125,7 @@ import com.dot.gallery.feature_node.presentation.settings.subsettings.SlideshowS
 import com.dot.gallery.feature_node.presentation.settings.subsettings.SettingsTimelineAlbumsScreen
 import com.dot.gallery.feature_node.presentation.settings.subsettings.EditBackupsViewerScreen
 import com.dot.gallery.feature_node.presentation.settings.subsettings.AIModelsManagerScreen
+import com.dot.gallery.feature_node.presentation.settings.subsettings.SettingsCloudIndexingScreen
 import com.dot.gallery.feature_node.presentation.settings.subsettings.SettingsSecurityScreen
 import com.dot.gallery.feature_node.presentation.settings.subsettings.SettingsBackupScreen
 import com.dot.gallery.feature_node.presentation.settings.subsettings.SettingsBackupExportScreen
@@ -1258,6 +1259,9 @@ fun NavigationComp(
             }
             composable(Screen.SettingsSmartFeaturesScreen()) {
                 SettingsSmartFeaturesScreen()
+            }
+            composable(Screen.SettingsCloudIndexingScreen()) {
+                SettingsCloudIndexingScreen()
             }
             composable(Screen.SmartScanPreferenceDetailScreen()) {
                 SmartScanPreferenceDetailScreen()

@@ -31,5 +31,8 @@ enum class ProviderCapability {
     /** A recoverable trash/bin: [RemoteMediaProvider.trashAsset] soft-deletes and
      * [RemoteMediaProvider.restoreAsset] can bring the item back. Providers that only
      * hard-delete (WebDAV/SMB/NFS, where trashAsset == deleteAsset) do NOT declare this. */
-    TRASH
+    TRASH,
+
+    /** Server-side user tags/labels that can be synced read-only into the local DB. */
+    TAGS
 }

@@ -35,3 +35,4 @@ ml-models/src/main/assets/arcface.onnx
 # <<< ml-models split (managed)
 
 /scripts/native/sources/
+/testing

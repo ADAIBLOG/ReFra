@@ -194,8 +194,10 @@ data class ImmichUserDto(
 )
 
 data class ImmichSearchDto(
-    val query: String = "",
-    val type: String = "smart",
+    val query: String? = null,
+    // Anchors the CLIP similarity search at an existing asset ("more like this").
+    // The server looks up that asset's embedding; no raw vector ever leaves the server.
+    @SerializedName("queryAssetId") val queryAssetId: String? = null,
     val page: Int = 1,
     @SerializedName("size") val pageSize: Int = 100
 )
@@ -210,6 +212,13 @@ data class ImmichSearchAssetsDto(
     val items: List<ImmichAssetDto> = emptyList(),
     val facets: List<ImmichSearchFacetDto> = emptyList(),
     val nextPage: String? = null
+)
+
+data class ImmichTagDto(
+    val id: String = "",
+    val name: String = "",
+    val value: String = "",
+    val color: String? = null
 )
 
 data class ImmichSearchFacetDto(

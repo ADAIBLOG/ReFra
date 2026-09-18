@@ -18,14 +18,17 @@ import com.dot.gallery.cloud.data.dao.CloudMediaDao
 import com.dot.gallery.cloud.data.dao.CloudOfflinePinDao
 import com.dot.gallery.cloud.data.dao.CloudServerConfigDao
 import com.dot.gallery.cloud.data.dao.DetectedFaceDao
+import com.dot.gallery.cloud.data.dao.CloudTagDao
 import com.dot.gallery.cloud.data.dao.CloudUploadPrefDao
 import com.dot.gallery.cloud.data.dao.PersonDao
 import com.dot.gallery.cloud.data.dao.SyncStateDao
 import com.dot.gallery.cloud.data.entity.CloudAlbumSyncEntity
 import com.dot.gallery.cloud.data.entity.CloudBackupRevisionEntity
 import com.dot.gallery.cloud.data.entity.CloudMediaEntity
+import com.dot.gallery.cloud.data.entity.CloudMediaTagEntity
 import com.dot.gallery.cloud.data.entity.CloudOfflinePinEntity
 import com.dot.gallery.cloud.data.entity.CloudServerConfigEntity
+import com.dot.gallery.cloud.data.entity.CloudTagEntity
 import com.dot.gallery.cloud.data.entity.DetectedFaceEntity
 import com.dot.gallery.cloud.data.entity.FaceClusterEntity
 import com.dot.gallery.cloud.data.entity.OcrResultEntity
@@ -102,9 +105,11 @@ import com.dot.gallery.feature_node.domain.util.Converters
         SmartScanRunEntity::class,
         SmartScanPhaseEntity::class,
         MediaFeatureStateEntity::class,
-        MediaCaptureTimeEntity::class
+        MediaCaptureTimeEntity::class,
+        CloudTagEntity::class,
+        CloudMediaTagEntity::class
     ],
-    version = 46,
+    version = 47,
     exportSchema = true,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
@@ -154,6 +159,8 @@ import com.dot.gallery.feature_node.domain.util.Converters
         // Migration 41 to 42 is handled manually in MergedSubfolderMigration.kt
         // Migration 42 to 43 is handled manually in SmartScanMigration.kt
         // Migrations 43 to 45 are handled manually in CloudAlbumSyncPkMigration.kt
+        // Migration 45 to 46 is handled manually in CaptureTimeMigration.kt
+        // Migration 46 to 47 is handled manually in CloudTagMigration.kt
     ]
 )
 @TypeConverters(Converters::class, CloudConverters::class, SmartScanConverters::class)
@@ -215,6 +222,8 @@ abstract class InternalDatabase : RoomDatabase() {
     abstract fun getCloudOfflinePinDao(): CloudOfflinePinDao
 
     abstract fun getAlbumSectionDao(): AlbumSectionDao
+
+    abstract fun getCloudTagDao(): CloudTagDao
 
     companion object {
         const val NAME = "internal_db"

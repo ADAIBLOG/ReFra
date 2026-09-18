@@ -9,6 +9,10 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.WorkManager
+import com.dot.gallery.cloud.core.ProviderCapability
+import com.dot.gallery.cloud.core.ProviderRegistry
+import com.dot.gallery.cloud.core.ProviderType
+import com.dot.gallery.cloud.data.dao.CloudServerConfigDao
 import com.dot.gallery.core.Settings
 import com.dot.gallery.core.ml.DownloadInfo
 import com.dot.gallery.core.ml.ModelFileInfo
@@ -71,6 +75,8 @@ class SmartFeaturesViewModel @Inject constructor(
     private val modelManager: ModelManager,
     private val workManager: WorkManager,
     private val smartScanScheduler: SmartScanScheduler,
+    private val cloudServerConfigDao: CloudServerConfigDao,
+    private val providerRegistry: ProviderRegistry,
     smartScanDao: SmartScanDao,
     @param:ApplicationContext private val context: Context
 ) : ViewModel() {
@@ -94,6 +100,35 @@ class SmartFeaturesViewModel @Inject constructor(
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = false
     )
+
+    /** Provider types with at least one configured account. */
+    val configuredCloudProviders: StateFlow<List<ProviderType>> = cloudServerConfigDao.getAll()
+        .map { configs -> configs.map { it.providerType }.distinct() }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    /** Provider types opted into on-device indexing of their cached cloud media. */
+    val indexOnDeviceProviders: StateFlow<Set<String>> =
+        Settings.SmartFeatures.indexOnDeviceProviders(context).stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptySet()
+        )
+
+    /** Whether queries are delegated to SMART_SEARCH-capable servers. */
+    val providerSmartSearch: StateFlow<Boolean> =
+        Settings.SmartFeatures.providerSmartSearch(context).stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = true
+        )
+
+    /** Capabilities advertised by the registered provider for [type], if any instance exists. */
+    fun capabilitiesOf(type: ProviderType): Set<ProviderCapability> =
+        providerRegistry.get(type)?.capabilities ?: emptySet()
 
     val activeSmartScan: StateFlow<SmartScanRunEntity?> = smartScanDao.observeActiveRun()
         .map { run -> run?.takeIf { SmartScanPlan.shouldShowRun(it.userVisible, it.totalMedia) } }
@@ -150,6 +185,21 @@ class SmartFeaturesViewModel @Inject constructor(
         viewModelScope.launch {
             Settings.SmartFeatures.setIncludeIgnoredAlbums(context, include)
             smartScanScheduler.fullRefresh()
+        }
+    }
+
+    fun setIndexOnDeviceProvider(type: ProviderType, enabled: Boolean) {
+        viewModelScope.launch {
+            Settings.SmartFeatures.setIndexOnDeviceProvider(context, type, enabled)
+            // Opting in needs a scan pass to pick up the newly indexable items;
+            // opting out only shrinks the next run's candidate pool.
+            if (enabled) smartScanScheduler.automatic(SmartScanFeature.ALL_MASK)
+        }
+    }
+
+    fun setProviderSmartSearch(enabled: Boolean) {
+        viewModelScope.launch {
+            Settings.SmartFeatures.setProviderSmartSearch(context, enabled)
         }
     }
 

@@ -14,6 +14,7 @@ import androidx.work.WorkManager
 import com.dot.gallery.BuildConfig
 import com.dot.gallery.core.Resource
 import com.dot.gallery.core.Settings
+import com.dot.gallery.cloud.core.CloudUri
 import com.dot.gallery.cloud.core.ProviderType
 import com.dot.gallery.cloud.data.dao.DetectedFaceDao
 import com.dot.gallery.cloud.data.dao.DetectedFaceHeader
@@ -227,6 +228,19 @@ internal fun smartCloudSourceRevision(media: CloudMediaEntity): String {
     return "${media.timestamp / 1000L}:${media.size}:${media.mimeType}:$displayPath"
 }
 
+/**
+ * Whether [uri] may be processed by on-device smart-scan phases. Local media is always
+ * allowed; cloud media is only processed when the owning provider type was explicitly
+ * opted in via Settings.SmartFeatures.indexOnDeviceProviders — providers that declare
+ * SMART_SEARCH (Immich) are delegated to the server instead of being re-indexed here,
+ * and other remote providers default to off because indexing them costs one thumbnail
+ * download per asset.
+ */
+internal fun cloudIndexingAllowed(uri: String, enabledProviderNames: Set<String>): Boolean {
+    val cloud = CloudUri.parse(uri) ?: return true
+    return cloud.providerType.name in enabledProviderNames
+}
+
 internal fun smartSourceSnapshot(
     mediaStoreVersion: String,
     media: List<Media.UriMedia>,
@@ -433,7 +447,8 @@ class SearchIndexPhaseProcessor @Inject constructor(
     repository: MediaRepository,
     database: InternalDatabase,
     private val modelManager: ModelManager,
-    private val thumbnailLoader: SmartThumbnailLoader
+    private val thumbnailLoader: SmartThumbnailLoader,
+    @ApplicationContext private val appContext: Context
 ) : MediaPhaseProcessor(repository, database) {
     override val phase = SmartScanPhase.SEARCH_INDEX
     override val revision: String
@@ -451,7 +466,10 @@ class SearchIndexPhaseProcessor @Inject constructor(
         val statesToPersist = mutableListOf<MediaFeatureStateEntity>()
         val adoptedIds = mutableListOf<Long>()
         val candidates = mutableListOf<Media.UriMedia>()
+        val indexableProviders =
+            Settings.SmartFeatures.indexOnDeviceProviders(appContext).first()
         val searchMedia = media().filter { it.mimeType.startsWith("image/") }
+            .filter { cloudIndexingAllowed(it.uri.toString(), indexableProviders) }
         searchMedia.chunked(PREPARATION_BATCH_SIZE).forEach { batch ->
             val adoptionIds = if (context.fullRefresh) emptyList() else batch.mapNotNull { item ->
                 val source = sourceRevision(item)
@@ -852,7 +870,11 @@ class FaceIndexPhaseProcessor @Inject constructor(
         val states = scanDao.getFeatureStates(MediaFeature.FACE_DETECTION).associateBy { it.mediaId }
         val headers = faceDao.getHeaders().groupBy { it.mediaId }
         val statesToPersist = mutableListOf<MediaFeatureStateEntity>()
-        val candidates = media().filter { it.mimeType.startsWith("image/") }.filter { item ->
+        val indexableProviders =
+            Settings.SmartFeatures.indexOnDeviceProviders(appContext).first()
+        val candidates = media().filter { it.mimeType.startsWith("image/") }
+            .filter { cloudIndexingAllowed(it.uri.toString(), indexableProviders) }
+            .filter { item ->
             val source = sourceRevision(item)
             val state = states[item.id]
             val existingHeaders = headers[item.id].orEmpty()

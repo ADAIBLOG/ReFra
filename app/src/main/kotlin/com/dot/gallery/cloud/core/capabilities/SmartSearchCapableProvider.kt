@@ -10,4 +10,11 @@ import com.dot.gallery.feature_node.domain.model.Media
 
 interface SmartSearchCapableProvider : MediaCapabilityProvider {
     suspend fun smartSearch(query: String): Result<List<Media>>
+
+    /**
+     * Server-side "more like this" search anchored at the provider's own asset
+     * [remoteId] (e.g. Immich's queryAssetId). Only meaningful for media this
+     * provider serves.
+     */
+    suspend fun smartSearchByAsset(remoteId: String): Result<List<Media>>
 }

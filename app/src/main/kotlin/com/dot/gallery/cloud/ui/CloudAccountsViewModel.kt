@@ -26,6 +26,7 @@ import com.dot.gallery.cloud.data.dao.CloudAlbumSyncDao
 import com.dot.gallery.cloud.data.dao.CloudMediaDao
 import com.dot.gallery.cloud.data.dao.CloudOfflinePinDao
 import com.dot.gallery.cloud.data.dao.CloudServerConfigDao
+import com.dot.gallery.cloud.data.dao.CloudTagDao
 import com.dot.gallery.cloud.data.dao.CloudUploadPrefDao
 import com.dot.gallery.cloud.data.dao.SyncStateDao
 import com.dot.gallery.cloud.data.entity.CloudServerConfigEntity
@@ -144,6 +145,7 @@ data class AddServerUiState(
 class CloudAccountsViewModel @Inject constructor(
     private val configDao: CloudServerConfigDao,
     private val cloudMediaDao: CloudMediaDao,
+    private val cloudTagDao: CloudTagDao,
     private val offlinePinDao: CloudOfflinePinDao,
     private val cloudMediaCache: CloudMediaCache,
     private val workManager: WorkManager,
@@ -484,6 +486,7 @@ class CloudAccountsViewModel @Inject constructor(
                     registry.unregister(id)
                     if (oldEntity == null) {
                         cloudMediaDao.deleteByServerConfig(id)
+                        cloudTagDao.deleteForAccount(id)
                         uploadPrefDao.deleteByConfig(id)
                         albumSyncDao.deleteByServer(id)
                         configDao.deleteById(id)
@@ -528,6 +531,7 @@ class CloudAccountsViewModel @Inject constructor(
             syncStateDao.deleteByConfig(configId)
             pendingCloudFavoriteStore.removeForAccount(configId)
             cloudMediaDao.deleteByServerConfig(configId)
+            cloudTagDao.deleteForAccount(configId)
             uploadPrefDao.deleteByConfig(configId)
             albumSyncDao.deleteByServer(configId)
             configDao.deleteById(configId)

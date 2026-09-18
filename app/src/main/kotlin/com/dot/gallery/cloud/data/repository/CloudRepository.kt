@@ -63,6 +63,22 @@ interface CloudRepository {
     // Smart search across all providers
     suspend fun smartSearch(query: String): Result<List<Media>>
 
+    /**
+     * Server-side reverse image search anchored at one of the provider's own assets.
+     * Only valid when the owning account declares SMART_SEARCH capability.
+     */
+    suspend fun smartSearchByAsset(
+        type: ProviderType,
+        configId: Long,
+        remoteId: String
+    ): Result<List<Media>>
+
+    /**
+     * Global media ids of cloud assets whose synced server tags match [query]
+     * (name or value contains). Empty when no tag-capable account is synced.
+     */
+    suspend fun findTagMediaIds(query: String): List<Long>
+
     // Share links
     suspend fun createShareLink(
         type: ProviderType,

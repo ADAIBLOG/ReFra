@@ -19,6 +19,7 @@ import com.dot.gallery.cloud.core.ProviderCapability
 import com.dot.gallery.cloud.core.ProviderRegistry
 import com.dot.gallery.cloud.core.ProviderType
 import com.dot.gallery.cloud.core.SharedLinkInfo
+import com.dot.gallery.cloud.core.cloudMediaId
 import com.dot.gallery.cloud.core.capabilities.MapCapableProvider
 import com.dot.gallery.cloud.core.capabilities.MemoriesCapableProvider
 import com.dot.gallery.cloud.core.capabilities.PeopleCapableProvider
@@ -31,6 +32,7 @@ import com.dot.gallery.cloud.core.capabilities.ShareLinkCapableProvider
 import com.dot.gallery.cloud.core.capabilities.SmartSearchCapableProvider
 import com.dot.gallery.cloud.core.capabilities.SyncCapableProvider
 import com.dot.gallery.cloud.data.dao.CloudMediaDao
+import com.dot.gallery.cloud.data.dao.CloudTagDao
 import com.dot.gallery.cloud.data.entity.CloudMediaEntity
 import com.dot.gallery.cloud.network.ServerUrlResolver
 import com.dot.gallery.core.Resource
@@ -143,6 +145,7 @@ internal suspend fun copyRemoteAlbumForAccount(
 class CloudRepositoryImpl @Inject constructor(
     private val registry: ProviderRegistry,
     private val cloudMediaDao: CloudMediaDao,
+    private val cloudTagDao: CloudTagDao,
     private val urlResolver: ServerUrlResolver
 ) : CloudRepository {
 
@@ -286,10 +289,41 @@ class CloudRepositoryImpl @Inject constructor(
         if (providers.isEmpty()) return Result.success(emptyList())
         val allResults = mutableListOf<Media>()
         for (provider in providers) {
+            // One provider's failure must not drop the others' hits: a server with ML
+            // disabled answers HTTP 400, which degrades to "no remote hits" here.
             provider.smartSearch(query).onSuccess { allResults.addAll(it) }
         }
         return Result.success(allResults)
     }
+
+    override suspend fun smartSearchByAsset(
+        type: ProviderType,
+        configId: Long,
+        remoteId: String
+    ): Result<List<Media>> {
+        // URIs minted before the cfg param existed carry no account id — fall back to the
+        // first instance of the type, mirroring ProviderRegistry.resolveRemote.
+        val provider = if (configId > 0L) {
+            resolveProviderAccount<SmartSearchCapableProvider>(
+                registry = registry,
+                type = type,
+                configId = configId,
+                capabilityName = "smart search"
+            ).getOrElse { return Result.failure(it) }
+        } else {
+            registry.get(type) as? SmartSearchCapableProvider
+                ?: return Result.failure(Exception("Provider $type does not support smart search"))
+        }
+        if (!provider.isAvailable) {
+            return Result.failure(Exception("Provider account $configId is not connected"))
+        }
+        return provider.smartSearchByAsset(remoteId)
+    }
+
+    override suspend fun findTagMediaIds(query: String): List<Long> =
+        cloudTagDao.findLinksForTagQuery(query).map {
+            cloudMediaId(it.providerType, it.serverConfigId, it.remoteId)
+        }
 
     // === Share Links ===
 

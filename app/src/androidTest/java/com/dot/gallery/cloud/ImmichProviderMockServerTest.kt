@@ -327,12 +327,132 @@ class ImmichProviderMockServerTest {
     }
 
     @Test
+    fun smartSearchPostsQueryAndParsesHits() = runBlocking {
+        server.dispatcher = dispatcher { req ->
+            if (req.path?.endsWith("/api/search/smart") == true) {
+                val requestJson = JsonParser.parseString(req.body.readUtf8()).asJsonObject
+                assertEquals("mountain", requestJson["query"].asString)
+                json(assetsJson)
+            } else {
+                null
+            }
+        }
+        provider.configure(
+            CloudServerConfig(id = 8, providerType = ProviderType.IMMICH, serverUrl = baseUrl(), apiKey = "KEY")
+        )
+
+        val result = provider.smartSearch("mountain")
+
+        assertTrue("smart search should succeed: ${result.exceptionOrNull()}", result.isSuccess)
+        assertEquals(1, result.getOrThrow().size)
+        // The hit is cached so the timeline/viewer can render it before the next prefetch.
+        assertEquals(1, dao.getByServerConfig(8L).first().size)
+    }
+
+    @Test
+    fun smartSearchByAssetSendsQueryAssetIdAndDropsAnchor() = runBlocking {
+        server.dispatcher = dispatcher { req ->
+            if (req.path?.endsWith("/api/search/smart") == true) {
+                val requestJson = JsonParser.parseString(req.body.readUtf8()).asJsonObject
+                assertEquals("asset-1", requestJson["queryAssetId"].asString)
+                assertTrue("anchor search must not send a text query", !requestJson.has("query"))
+                json(
+                    """{ "assets": { "total": 2, "count": 2, "items": [
+                        { "id": "asset-1", "type": "IMAGE", "originalFileName": "a.jpg",
+                          "originalMimeType": "image/jpeg", "fileCreatedAt": "2024-01-15T10:30:00.000Z" },
+                        { "id": "asset-2", "type": "IMAGE", "originalFileName": "b.jpg",
+                          "originalMimeType": "image/jpeg", "fileCreatedAt": "2024-01-15T10:30:00.000Z" }
+                    ] } }"""
+                )
+            } else {
+                null
+            }
+        }
+        provider.configure(
+            CloudServerConfig(id = 9, providerType = ProviderType.IMMICH, serverUrl = baseUrl(), apiKey = "KEY")
+        )
+
+        val result = provider.smartSearchByAsset("asset-1")
+
+        assertTrue("anchor search should succeed: ${result.exceptionOrNull()}", result.isSuccess)
+        val hits = result.getOrThrow()
+        assertEquals(1, hits.size)
+        assertTrue("the anchor asset must be excluded from its own results", hits.none { it.label == "a.jpg" })
+    }
+
+    @Test
+    fun getTagsParsesTagList() = runBlocking {
+        server.dispatcher = dispatcher { req ->
+            if (req.path?.endsWith("/api/tags") == true) {
+                json(
+                    """[ { "id": "tag-1", "name": "Nature", "value": "Nature", "color": "#12ab34" },
+                         { "id": "tag-2", "name": "Family", "value": "Family" } ]"""
+                )
+            } else {
+                null
+            }
+        }
+        provider.configure(
+            CloudServerConfig(id = 10, providerType = ProviderType.IMMICH, serverUrl = baseUrl(), apiKey = "KEY")
+        )
+
+        val result = provider.getTags()
+
+        assertTrue("tag fetch should succeed: ${result.exceptionOrNull()}", result.isSuccess)
+        val tags = result.getOrThrow()
+        assertEquals(2, tags.size)
+        assertEquals("tag-1", tags[0].tagId)
+        assertEquals("Nature", tags[0].name)
+        assertEquals("#12ab34", tags[0].color)
+        assertEquals(null, tags[1].color)
+    }
+
+    @Test
+    fun getTagAssetIdsPaginatesMetadataSearch() = runBlocking {
+        val seenPages = mutableListOf<Int>()
+        server.dispatcher = dispatcher { req ->
+            if (req.path?.endsWith("/api/search/metadata") == true) {
+                val requestJson = JsonParser.parseString(req.body.readUtf8()).asJsonObject
+                assertEquals("tag-1", requestJson["tagIds"].asJsonArray[0].asString)
+                val page = requestJson["page"].asInt
+                seenPages += page
+                if (page == 1) {
+                    json(
+                        """{ "assets": { "total": 2, "count": 1, "nextPage": "2", "items": [
+                            { "id": "asset-1", "type": "IMAGE", "originalFileName": "a.jpg",
+                              "originalMimeType": "image/jpeg", "fileCreatedAt": "2024-01-15T10:30:00.000Z" }
+                        ] } }"""
+                    )
+                } else {
+                    json(
+                        """{ "assets": { "total": 2, "count": 1, "items": [
+                            { "id": "asset-2", "type": "IMAGE", "originalFileName": "b.jpg",
+                              "originalMimeType": "image/jpeg", "fileCreatedAt": "2024-01-15T10:30:00.000Z" }
+                        ] } }"""
+                    )
+                }
+            } else {
+                null
+            }
+        }
+        provider.configure(
+            CloudServerConfig(id = 11, providerType = ProviderType.IMMICH, serverUrl = baseUrl(), apiKey = "KEY")
+        )
+
+        val result = provider.getTagAssetIds("tag-1")
+
+        assertTrue("tag asset listing should succeed: ${result.exceptionOrNull()}", result.isSuccess)
+        assertEquals(listOf("asset-1", "asset-2"), result.getOrThrow())
+        assertEquals(listOf(1, 2), seenPages)
+    }
+
+    @Test
     fun capabilitiesIncludeAllImmichFeatures() {
         val caps = provider.capabilities.map { it.name }.toSet()
         assertNotNull(caps)
         listOf(
             "REMOTE_ASSETS", "REMOTE_ALBUMS", "SYNC", "ALBUM_WRITE", "PEOPLE", "MAP",
-            "SMART_SEARCH", "SHARE_CREATE", "SHARE_MANAGE", "ARCHIVE", "MEMORIES"
+            "SMART_SEARCH", "SHARE_CREATE", "SHARE_MANAGE", "ARCHIVE", "MEMORIES", "TAGS"
         ).forEach { assertTrue("Immich must declare $it", it in caps) }
     }
 }

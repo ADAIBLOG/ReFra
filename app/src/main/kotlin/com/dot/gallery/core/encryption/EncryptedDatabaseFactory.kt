@@ -25,6 +25,7 @@ import com.dot.gallery.feature_node.data.data_source.migration.MIGRATION_42_43
 import com.dot.gallery.feature_node.data.data_source.migration.MIGRATION_43_44
 import com.dot.gallery.feature_node.data.data_source.migration.MIGRATION_44_45
 import com.dot.gallery.feature_node.data.data_source.migration.MIGRATION_45_46
+import com.dot.gallery.feature_node.data.data_source.migration.MIGRATION_46_47
 import com.dot.gallery.feature_node.presentation.util.printDebug
 import com.dot.gallery.feature_node.presentation.util.printWarning
 import net.zetetic.database.sqlcipher.SQLiteDatabase
@@ -111,7 +112,8 @@ object EncryptedDatabaseFactory {
                     MIGRATION_42_43,
                     MIGRATION_43_44,
                     MIGRATION_44_45,
-                    MIGRATION_45_46
+                    MIGRATION_45_46,
+                    MIGRATION_46_47
                 )
                 .fallbackToDestructiveMigrationOnDowngrade(true)
                 .fallbackToDestructiveMigration(false)

@@ -44,6 +44,7 @@ fun SettingsSmartFeaturesScreen(
     val activeSmartScanPhases by viewModel.activeSmartScanPhases.collectAsStateWithLifecycle()
     val latestSmartScan by viewModel.latestSmartScan.collectAsStateWithLifecycle()
     val includeIgnoredAlbums by viewModel.includeIgnoredAlbums.collectAsStateWithLifecycle()
+    val configuredCloudProviders by viewModel.configuredCloudProviders.collectAsStateWithLifecycle()
 
     val scrollBehavior =
         TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
@@ -136,6 +137,8 @@ fun SettingsSmartFeaturesScreen(
         val storageHeader = stringResource(R.string.edit_backups_storage)
         val editBackupsTitle = stringResource(R.string.edit_backups)
         val editBackupsSummary = stringResource(R.string.edit_backups_summary)
+        val cloudIndexingTitle = stringResource(R.string.smart_features_cloud_section)
+        val cloudIndexingSummary = stringResource(R.string.smart_features_cloud_indexing_summary)
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
@@ -169,6 +172,14 @@ fun SettingsSmartFeaturesScreen(
                         summary = categoriesSummary,
                         enabled = modelStatus == ModelStatus.READY,
                         onClick = { handler.navigate(Screen.CategoriesScreen()) }
+                    )
+                }
+
+                if (configuredCloudProviders.isNotEmpty()) {
+                    Preference(
+                        title = cloudIndexingTitle,
+                        summary = cloudIndexingSummary,
+                        onClick = { handler.navigate(Screen.SettingsCloudIndexingScreen()) }
                     )
                 }
 
