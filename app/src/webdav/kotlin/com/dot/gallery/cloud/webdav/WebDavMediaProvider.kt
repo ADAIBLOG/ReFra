@@ -30,11 +30,13 @@ import com.dot.gallery.cloud.core.capabilities.RemoteAlbumWriteProvider
 import com.dot.gallery.cloud.core.capabilities.RemoteMediaProvider
 import com.dot.gallery.cloud.core.capabilities.RemoteNameConflictPolicy
 import com.dot.gallery.cloud.core.capabilities.ShareLinkCapableProvider
+import com.dot.gallery.cloud.core.capabilities.SyncDelta
 import com.dot.gallery.cloud.core.capabilities.remoteAlbumFilePath
 import com.dot.gallery.cloud.core.capabilities.remoteCopyFileName
 import com.dot.gallery.cloud.image.firstAvailableVideoFrame
 import com.dot.gallery.cloud.data.dao.CloudMediaDao
 import com.dot.gallery.cloud.data.entity.CloudMediaEntity
+import com.dot.gallery.cloud.sync.deleteAppLocalCopies
 import com.dot.gallery.cloud.webdav.data.api.WebDavClient
 import com.dot.gallery.cloud.webdav.data.api.WebDavException
 import com.dot.gallery.cloud.webdav.data.api.WebDavResource
@@ -191,11 +193,14 @@ open class WebDavMediaProvider(
             val configId = currentConfig?.id ?: 0L
             val scan = scanMediaFiles(client, "")
             if (shouldReconcileWebDavScan(page, configId, scan.complete)) {
-                cloudMediaDao.deleteMissingRemoteMedia(
+                val pruned = cloudMediaDao.deleteMissingRemoteMedia(
                     configId,
                     dialect.providerType,
                     scan.files.map { client.relativePath(it.href) }
                 )
+                if (currentConfig?.syncRemoteDeletions == true && pruned.isNotEmpty()) {
+                    deleteAppLocalCopies(context, pruned)
+                }
             }
             val paged = scan.files.drop(page * pageSize).take(pageSize)
             val entities = paged.map { it.toCloudMediaEntity(configId) }
@@ -621,11 +626,24 @@ open class WebDavMediaProvider(
         }
     }
 
-    override suspend fun getChangedSince(timestamp: Long): Result<List<CloudMediaEntity>> {
+    override suspend fun getSyncDelta(timestamp: Long, reconcileIndex: Boolean): Result<SyncDelta> {
         return try {
             val client = webDavClient ?: throw IllegalStateException("Not configured")
             val configId = currentConfig?.id ?: 0L
-            Result.success(scanMediaFiles(client, "").files.map { it.toCloudMediaEntity(configId) })
+            // WebDAV has no delta endpoint — the "delta" is a full recursive scan. Report
+            // the complete remote index whenever the scan finished cleanly so the caller
+            // can prune vanished files; an incomplete scan must not prune (see AGENTS.md).
+            val scan = scanMediaFiles(client, "")
+            Result.success(
+                SyncDelta(
+                    items = scan.files.map { it.toCloudMediaEntity(configId) },
+                    completeRemoteIds = if (scan.complete) {
+                        scan.files.map { client.relativePath(it.href) }
+                    } else {
+                        null
+                    }
+                )
+            )
         } catch (e: Exception) {
             Result.failure(e)
         }

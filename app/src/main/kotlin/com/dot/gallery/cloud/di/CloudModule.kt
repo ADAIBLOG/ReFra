@@ -5,6 +5,7 @@
 
 package com.dot.gallery.cloud.di
 
+import android.content.Context
 import com.dot.gallery.cloud.core.ProviderInstanceFactory
 import com.dot.gallery.cloud.core.ProviderRegistry
 import com.dot.gallery.cloud.core.auth.CloudInteractiveAuthHandler
@@ -25,6 +26,7 @@ import com.dot.gallery.feature_node.data.data_source.InternalDatabase
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import dagger.multibindings.Multibinds
 import javax.inject.Singleton
@@ -96,7 +98,13 @@ abstract class CloudModule {
             registry: ProviderRegistry,
             cloudMediaDao: CloudMediaDao,
             cloudTagDao: CloudTagDao,
-            urlResolver: ServerUrlResolver
-        ): CloudRepository = CloudRepositoryImpl(registry, cloudMediaDao, cloudTagDao, urlResolver)
+            urlResolver: ServerUrlResolver,
+            configDao: CloudServerConfigDao,
+            syncStateDao: SyncStateDao,
+            @ApplicationContext context: Context
+        ): CloudRepository = CloudRepositoryImpl(
+            registry, cloudMediaDao, cloudTagDao, urlResolver,
+            configDao, syncStateDao, context
+        )
     }
 }

@@ -25,13 +25,15 @@ class CloudSyncScheduler @Inject constructor(
             printDebug("CloudSyncScheduler: No sync-enabled configs, canceling workers")
             CloudSyncWorker.cancel(workManager)
             CloudUploadWorker.cancel(workManager)
+            CloudDownloadWorker.cancel(workManager)
             return
         }
 
         printDebug(
             "CloudSyncScheduler: Scheduling sync + upload " +
                 "(interval=${plan.intervalMinutes}, syncWifiOnly=${plan.syncWifiOnly}, " +
-                "uploadWifiOnly=${plan.uploadWifiOnly})"
+                "uploadWifiOnly=${plan.uploadWifiOnly}, " +
+                "downloadWifiOnly=${plan.downloadWifiOnly})"
         )
         CloudSyncWorker.schedule(
             workManager,
@@ -43,13 +45,24 @@ class CloudSyncScheduler @Inject constructor(
             intervalMinutes = plan.intervalMinutes,
             wifiOnly = plan.uploadWifiOnly
         )
+        if (plan.downloadWifiOnly != null) {
+            CloudDownloadWorker.schedule(
+                workManager,
+                intervalMinutes = plan.intervalMinutes,
+                wifiOnly = plan.downloadWifiOnly
+            )
+        } else {
+            CloudDownloadWorker.cancel(workManager)
+        }
     }
 }
 
 internal data class CloudSyncSchedulePlan(
     val intervalMinutes: Long,
     val syncWifiOnly: Boolean,
-    val uploadWifiOnly: Boolean
+    val uploadWifiOnly: Boolean,
+    /** Non-null when at least one account enabled remote downloads; the value is the shared wifiOnly constraint. */
+    val downloadWifiOnly: Boolean?
 )
 
 /**
@@ -75,13 +88,17 @@ internal fun cloudSyncSchedulePlan(
     configs: List<CloudServerConfigEntity>
 ): CloudSyncSchedulePlan? {
     val syncConfigs = configs.filter { it.isActive && it.syncEnabled }
-    if (syncConfigs.isEmpty()) return null
+    val downloadConfigs = configs.filter { it.isActive && it.downloadRemoteEnabled }
+    if (syncConfigs.isEmpty() && downloadConfigs.isEmpty()) return null
     // Shared WorkManager constraints must be permissive enough for every account. Each worker
     // applies the same policy again per account (and, for uploads, per media type).
     return CloudSyncSchedulePlan(
-        intervalMinutes = syncConfigs.minOf { it.syncIntervalMinutes }.toLong().coerceAtLeast(15L),
+        intervalMinutes = (syncConfigs + downloadConfigs)
+            .minOf { it.syncIntervalMinutes }.toLong().coerceAtLeast(15L),
         syncWifiOnly = syncConfigs.none(CloudCellularPolicy::allowsSync),
-        uploadWifiOnly = syncConfigs.none(CloudCellularPolicy::allowsAnyUpload)
+        uploadWifiOnly = syncConfigs.none(CloudCellularPolicy::allowsAnyUpload),
+        downloadWifiOnly = if (downloadConfigs.isEmpty()) null
+            else downloadConfigs.none(CloudCellularPolicy::allowsSync)
     )
 }
 
@@ -95,4 +112,5 @@ internal fun cloudSyncScheduleChanged(
     oldConfig.cellularPhotos != newConfig.cellularPhotos ||
     oldConfig.cellularVideos != newConfig.cellularVideos ||
     oldConfig.requireCharging != newConfig.requireCharging ||
-    oldConfig.syncAlbums != newConfig.syncAlbums
+    oldConfig.syncAlbums != newConfig.syncAlbums ||
+    oldConfig.downloadRemoteEnabled != newConfig.downloadRemoteEnabled

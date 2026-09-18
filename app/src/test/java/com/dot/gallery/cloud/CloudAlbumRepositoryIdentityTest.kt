@@ -20,6 +20,7 @@ import com.dot.gallery.cloud.core.capabilities.RemoteAlbumCopyState
 import com.dot.gallery.cloud.core.capabilities.RemoteAlbumWriteProvider
 import com.dot.gallery.cloud.core.capabilities.RemoteMediaProvider
 import com.dot.gallery.cloud.core.capabilities.RemoteNameConflictPolicy
+import com.dot.gallery.cloud.core.capabilities.SyncDelta
 import com.dot.gallery.cloud.data.entity.CloudMediaEntity
 import com.dot.gallery.cloud.data.repository.copyRemoteAlbumForAccount
 import com.dot.gallery.cloud.data.repository.getRemoteAlbumMediaForAccount
@@ -277,8 +278,8 @@ class CloudAlbumRepositoryIdentityTest {
             )
         override suspend fun downloadAsset(remoteId: String) =
             Result.failure<android.net.Uri>(UnsupportedOperationException())
-        override suspend fun getChangedSince(timestamp: Long) =
-            Result.success(emptyList<CloudMediaEntity>())
+        override suspend fun getSyncDelta(timestamp: Long, reconcileIndex: Boolean) =
+            Result.success(SyncDelta(items = emptyList()))
         override suspend fun bulkUploadCheck(hashes: List<String>) =
             Result.success(emptyMap<String, Boolean>())
         override suspend fun copyToAlbum(

@@ -221,6 +221,17 @@ data class ImmichTagDto(
     val color: String? = null
 )
 
+/** `AssetDeltaSyncResponseDto` — `POST api/sync/delta-sync`. */
+data class ImmichDeltaSyncResponseDto(
+    val added: List<ImmichAssetDto> = emptyList(),
+    val deleted: List<ImmichAssetIdsDto> = emptyList()
+)
+
+/** `AssetIdsResponseDto` — a bare asset id wrapper used by the sync endpoints. */
+data class ImmichAssetIdsDto(
+    val assetId: String = ""
+)
+
 data class ImmichSearchFacetDto(
     @SerializedName("fieldName") val fieldName: String = "",
     val counts: List<ImmichFacetCountDto> = emptyList()

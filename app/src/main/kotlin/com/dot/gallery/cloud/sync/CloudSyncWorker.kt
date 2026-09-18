@@ -19,9 +19,12 @@ import androidx.work.WorkerParameters
 import com.dot.gallery.cloud.core.ProviderRegistry
 import com.dot.gallery.cloud.core.capabilities.RemoteMediaProvider
 import com.dot.gallery.cloud.core.capabilities.SyncCapableProvider
+import com.dot.gallery.cloud.core.capabilities.SyncDelta
 import com.dot.gallery.cloud.data.dao.CloudMediaDao
+import com.dot.gallery.cloud.data.dao.CloudMediaLocalState
 import com.dot.gallery.cloud.data.dao.CloudServerConfigDao
 import com.dot.gallery.cloud.data.dao.SyncStateDao
+import com.dot.gallery.cloud.data.entity.CloudServerConfigEntity
 import com.dot.gallery.cloud.data.entity.SyncStateEntity
 import com.dot.gallery.core.smart.SmartScanScheduler
 import com.dot.gallery.feature_node.data.data_source.SmartScanFeature
@@ -70,30 +73,44 @@ class CloudSyncWorker @AssistedInject constructor(
                         now = syncStartedAt
                     )) continue
 
-                printDebug("CloudSyncWorker: Syncing ${config.providerType.displayName} #${config.id}...")
+                // Providers without a real deletion channel can't spot vanished remote
+                // files in a delta; ask them for a full index on a slower cadence so the
+                // cache still self-heals (deletions propagate within ~24h).
+                val reconcileIndex = isCloudReconcileDue(
+                    lastReconcileCursor = previousState?.lastSyncCursor,
+                    now = syncStartedAt
+                )
+
+                printDebug("CloudSyncWorker: Syncing ${config.providerType.displayName} #${config.id} (reconcile=$reconcileIndex)...")
                 val syncResult = syncIncrementally(
                     lastWatermark = previousState?.lastSyncTimestamp ?: 0L,
                     nextWatermark = syncStartedAt,
-                    fetch = syncProvider::getChangedSince,
-                    persist = { changed ->
-                        printDebug("CloudSyncWorker: ${changed.size} changes for ${config.providerType.displayName} #${config.id}")
-                        // Persist the delta into Room so the unified timeline reflects remote
-                        // changes. Previously the changed set was fetched then discarded, which
-                        // made the periodic worker a no-op beyond advancing the timestamp.
-                        if (changed.isNotEmpty()) cloudMediaDao.insertAll(changed)
+                    fetch = { syncProvider.getSyncDelta(it, reconcileIndex) },
+                    persist = { delta ->
+                        printDebug("CloudSyncWorker: ${delta.items.size} changes, ${delta.deletedRemoteIds.size} deletions for ${config.providerType.displayName} #${config.id}")
+                        applyCloudSyncDelta(applicationContext, cloudMediaDao, config, delta)
                     },
                     advanceWatermark = { timestamp ->
-                        // Update last sync timestamp
+                        // Update last sync timestamp; record when a full-index reconcile last
+                        // ran so providers with an expensive index stay on the slow cadence.
                         syncStateDao.upsert(
                             (previousState ?: SyncStateEntity(
                                 providerType = config.providerType,
                                 serverConfigId = config.id
-                            )).copy(lastSyncTimestamp = timestamp, lastError = null)
+                            )).copy(
+                                lastSyncTimestamp = timestamp,
+                                lastSyncCursor = if (reconcileIndex) {
+                                    timestamp.toString()
+                                } else {
+                                    previousState?.lastSyncCursor
+                                },
+                                lastError = null
+                            )
                         )
                     }
                 )
-                syncResult.onSuccess { changedCount ->
-                    mediaChanged = mediaChanged || changedCount > 0
+                syncResult.onSuccess { delta ->
+                    mediaChanged = mediaChanged || delta.changedCount > 0
                     printDebug("CloudSyncWorker: Done syncing ${config.providerType.displayName}")
                 }.onFailure { error ->
                     retryNeeded = true
@@ -144,6 +161,37 @@ class CloudSyncWorker @AssistedInject constructor(
     }
 }
 
+/**
+ * Persists a [SyncDelta] into Room: upserts changed rows, applies provider-reported
+ * deletions, and prunes cached rows against a complete remote index. When the account
+ * has `syncRemoteDeletions` enabled, pruned rows that carry an app-owned local copy
+ * (`appLocalCopy`) also have that copy removed — user files are never touched because
+ * the DAO only surfaces app-flagged copies. Shared by the periodic worker and the
+ * pull-to-refresh path (`CloudRepository.syncAllRemoteChanges`).
+ */
+internal suspend fun applyCloudSyncDelta(
+    context: Context,
+    cloudMediaDao: CloudMediaDao,
+    config: CloudServerConfigEntity,
+    delta: SyncDelta
+) {
+    if (delta.items.isNotEmpty()) cloudMediaDao.insertAll(delta.items)
+    val prunedLocalCopies = mutableListOf<CloudMediaLocalState>()
+    if (delta.deletedRemoteIds.isNotEmpty()) {
+        prunedLocalCopies += cloudMediaDao.deleteByRemoteIds(
+            config.providerType, config.id, delta.deletedRemoteIds
+        )
+    }
+    delta.completeRemoteIds?.let { remoteIds ->
+        prunedLocalCopies += cloudMediaDao.deleteMissingRemoteMedia(
+            config.id, config.providerType, remoteIds
+        )
+    }
+    if (config.syncRemoteDeletions && prunedLocalCopies.isNotEmpty()) {
+        deleteAppLocalCopies(context, prunedLocalCopies)
+    }
+}
+
 internal fun isCloudSyncDue(
     lastSyncTimestamp: Long,
     intervalMinutes: Int,
@@ -151,13 +199,27 @@ internal fun isCloudSyncDue(
 ): Boolean = lastSyncTimestamp <= 0L ||
     now - lastSyncTimestamp >= intervalMinutes.coerceAtLeast(15) * 60_000L
 
+internal const val CLOUD_RECONCILE_INTERVAL_MS = 24L * 60L * 60_000L
+
+/**
+ * Full-index reconciles are expensive for providers without a real delta channel, so
+ * they run on a slower cadence than regular syncs. [lastReconcileCursor] stores the
+ * epoch-millis of the last successful reconcile in `sync_state.lastSyncCursor`; a
+ * missing/legacy value reconciles immediately (first sync always covers the index).
+ */
+internal fun isCloudReconcileDue(
+    lastReconcileCursor: String?,
+    now: Long,
+    intervalMs: Long = CLOUD_RECONCILE_INTERVAL_MS
+): Boolean = lastReconcileCursor?.toLongOrNull()?.let { now - it >= intervalMs } ?: true
+
 internal suspend fun <T> syncIncrementally(
     lastWatermark: Long,
     nextWatermark: Long,
-    fetch: suspend (Long) -> Result<List<T>>,
-    persist: suspend (List<T>) -> Unit,
+    fetch: suspend (Long) -> Result<T>,
+    persist: suspend (T) -> Unit,
     advanceWatermark: suspend (Long) -> Unit
-): Result<Int> {
+): Result<T> {
     val fetched = try {
         fetch(lastWatermark)
     } catch (error: CancellationException) {
@@ -172,7 +234,7 @@ internal suspend fun <T> syncIncrementally(
     return try {
         persist(changes)
         advanceWatermark(nextWatermark)
-        Result.success(changes.size)
+        Result.success(changes)
     } catch (error: CancellationException) {
         throw error
     } catch (error: Exception) {

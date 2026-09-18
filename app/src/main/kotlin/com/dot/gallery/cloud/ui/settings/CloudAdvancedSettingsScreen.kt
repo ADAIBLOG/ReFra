@@ -32,12 +32,16 @@ fun CloudAdvancedSettingsScreen(configId: Long) {
     }
     val troubleshooting = config?.verboseLogging ?: false
     val readOnlyMode = config?.readOnlyMode ?: false
+    val syncDeletions = config?.syncRemoteDeletions ?: false
     val troubleshootingHeader = stringResource(R.string.cloud_adv_troubleshooting)
     val verboseTitle = stringResource(R.string.cloud_adv_verbose)
     val verboseSummary = stringResource(R.string.cloud_adv_verbose_summary)
     val displayHeader = stringResource(R.string.cloud_adv_display)
     val readOnlyTitle = stringResource(R.string.cloud_adv_readonly)
     val readOnlySummary = stringResource(R.string.cloud_adv_readonly_summary)
+    val syncHeader = stringResource(R.string.cloud_adv_sync)
+    val syncDeletionsTitle = stringResource(R.string.cloud_adv_sync_deletions)
+    val syncDeletionsSummary = stringResource(R.string.cloud_adv_sync_deletions_summary)
     val cacheHeader = stringResource(R.string.cloud_global) + " · " +
         stringResource(R.string.cloud_adv_cache)
     val clearingCacheTitle = stringResource(R.string.cloud_adv_clearing_cache)
@@ -49,6 +53,9 @@ fun CloudAdvancedSettingsScreen(configId: Long) {
         displayHeader,
         readOnlyTitle,
         readOnlySummary,
+        syncHeader,
+        syncDeletionsTitle,
+        syncDeletionsSummary,
         cacheHeader,
         clearingCacheTitle,
         clearCacheTitle,
@@ -57,6 +64,7 @@ fun CloudAdvancedSettingsScreen(configId: Long) {
     val settingsList = remember(
         troubleshooting,
         readOnlyMode,
+        syncDeletions,
         cacheClearing,
         resourceStrings,
     ) {
@@ -81,6 +89,18 @@ fun CloudAdvancedSettingsScreen(configId: Long) {
                     summary = readOnlySummary,
                     isChecked = readOnlyMode,
                     onCheck = { settingsVm.updateConfig { copy(readOnlyMode = it) } },
+                    screenPosition = Position.Alone
+                )
+            )
+
+            // Sync section
+            add(SettingsEntity.Header(title = syncHeader))
+            add(
+                SettingsEntity.SwitchPreference(
+                    title = syncDeletionsTitle,
+                    summary = syncDeletionsSummary,
+                    isChecked = syncDeletions,
+                    onCheck = { settingsVm.updateConfig { copy(syncRemoteDeletions = it) } },
                     screenPosition = Position.Alone
                 )
             )

@@ -36,6 +36,7 @@ import com.dot.gallery.cloud.di.CloudProviderInitializer
 import com.dot.gallery.cloud.network.ServerUrlResolver
 import com.dot.gallery.cloud.offline.CacheAssetRef
 import com.dot.gallery.cloud.offline.CloudMediaCache
+import com.dot.gallery.cloud.sync.CloudDownloadWorker
 import com.dot.gallery.cloud.sync.CloudOfflineDownloadWorker
 import com.dot.gallery.cloud.sync.CloudSyncScheduler
 import com.dot.gallery.cloud.sync.cloudSyncScheduleChanged
@@ -637,6 +638,11 @@ class CloudAccountsViewModel @Inject constructor(
         val albumCount: Int = 0,
         val message: String = ""
     )
+
+    /** Enqueues a one-time remote -> local download pass for [configId] (used by "Download remote media" and "Download all"). */
+    fun triggerDownload(configId: Long) {
+        CloudDownloadWorker.triggerNow(workManager, configId)
+    }
 
     fun triggerSync(configId: Long) {
         viewModelScope.launch {

@@ -34,6 +34,7 @@ import com.dot.gallery.cloud.core.capabilities.RemoteMediaProvider
 import com.dot.gallery.cloud.core.capabilities.RemoteNameConflictPolicy
 import com.dot.gallery.cloud.core.capabilities.ShareLinkCapableProvider
 import com.dot.gallery.cloud.core.capabilities.SmartSearchCapableProvider
+import com.dot.gallery.cloud.core.capabilities.SyncDelta
 import com.dot.gallery.cloud.core.capabilities.CloudTagInfo
 import com.dot.gallery.cloud.core.capabilities.TagsCapableProvider
 import com.dot.gallery.cloud.data.dao.CloudMediaDao
@@ -84,6 +85,10 @@ import javax.inject.Singleton
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
+
+private const val IMMICH_DELTA_PAGE_SIZE = 1000
+private const val IMMICH_RECONCILE_PAGE_SIZE = 1000
+private const val IMMICH_MAX_RECONCILE_PAGES = 500
 
 internal fun immichChecksum(contentHash: String): String {
     val normalized = contentHash.lowercase()
@@ -1055,27 +1060,98 @@ class ImmichProvider @Inject constructor(
         }
     }
 
-    override suspend fun getChangedSince(timestamp: Long): Result<List<CloudMediaEntity>> {
+    override suspend fun getSyncDelta(timestamp: Long, reconcileIndex: Boolean): Result<SyncDelta> {
         return try {
             val configId = requireConfigId()
+            val api = requireApi()
             val isoTime = java.time.Instant.ofEpochMilli(timestamp).toString()
-            val body = mapOf<String, Any>(
-                "updatedAfter" to isoTime,
-                "size" to 1000,
-                "withExif" to true
-            )
-            val response = requireApi().searchAssets(body)
-            if (response.isSuccessful) {
-                val entities = response.body()?.assets?.items
-                    ?.map { it.toCloudMediaEntity(configId, baseUrl) }
-                    ?: emptyList()
-                Result.success(entities)
-            } else {
-                Result.failure(Exception("Failed to fetch changes: ${response.code()}"))
+
+            // Immich's delta-sync endpoint reports adds/updates AND deletions since the
+            // watermark — the only channel that can carry remote deletes without a full
+            // sweep. Servers lacking it (older than sync-v1, or newer ones where it was
+            // superseded) answer non-2xx and fall through to the search delta below.
+            val deltaResponse = runCatching {
+                api.deltaSync(mapOf("updatedAfter" to isoTime))
+            }.getOrNull()
+            if (deltaResponse?.isSuccessful == true) {
+                val body = deltaResponse.body()
+                return Result.success(
+                    SyncDelta(
+                        items = body?.added.orEmpty()
+                            .map { it.toCloudMediaEntity(configId, baseUrl) },
+                        deletedRemoteIds = body?.deleted.orEmpty()
+                            .map { it.assetId }
+                            .filter { it.isNotBlank() }
+                    )
+                )
             }
+
+            // Legacy path: updatedAfter metadata search (adds/updates only — deletions
+            // are invisible to it, which is why the reconcile sweep below exists).
+            val searchResponse = api.searchAssets(
+                mapOf(
+                    "updatedAfter" to isoTime,
+                    "size" to IMMICH_DELTA_PAGE_SIZE,
+                    "withExif" to true
+                )
+            )
+            if (!searchResponse.isSuccessful) {
+                return Result.failure(Exception("Failed to fetch changes: ${searchResponse.code()}"))
+            }
+            val changed = searchResponse.body()?.assets?.items
+                ?.map { it.toCloudMediaEntity(configId, baseUrl) }
+                ?: emptyList()
+            if (!reconcileIndex) return Result.success(SyncDelta(items = changed))
+
+            // Reconcile cadence: enumerate every remote id so the caller can prune rows
+            // whose remote asset vanished before delta-sync existed or on servers that
+            // never had it. A failed sweep returns null — the caller must NOT prune on a
+            // partial index.
+            val remoteIds = listAllRemoteIds(api)
+                ?: return Result.success(SyncDelta(items = changed))
+            Result.success(SyncDelta(items = changed, completeRemoteIds = remoteIds.toList()))
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    /**
+     * Pages the metadata search over the whole library and returns every remote asset
+     * id, or null if any page failed (callers must treat null as "index unknown — do
+     * not prune"). The default search only surfaces timeline assets, so archive and
+     * trash get their own passes to keep their cached rows from being dropped.
+     */
+    private suspend fun listAllRemoteIds(api: ImmichApiService): Set<String>? {
+        val ids = LinkedHashSet<String>()
+        val views = listOf(
+            emptyMap(),
+            mapOf<String, Any>("visibility" to "archive"),
+            mapOf<String, Any>("isTrashed" to true)
+        )
+        for (view in views) {
+            var page = 1
+            while (page <= IMMICH_MAX_RECONCILE_PAGES) {
+                val body = HashMap<String, Any>(view)
+                body["size"] = IMMICH_RECONCILE_PAGE_SIZE
+                body["page"] = page
+                val response = try {
+                    api.searchAssets(body)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    return null
+                }
+                if (!response.isSuccessful) return null
+                val assets = response.body()?.assets ?: return null
+                assets.items.forEach { ids += it.id }
+                if (assets.items.size < IMMICH_RECONCILE_PAGE_SIZE) break
+                page = assets.nextPage?.toIntOrNull() ?: (page + 1)
+            }
+            if (page > IMMICH_MAX_RECONCILE_PAGES) return null
+        }
+        return ids
     }
 
     override suspend fun bulkUploadCheck(hashes: List<String>): Result<Map<String, Boolean>> {

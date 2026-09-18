@@ -62,6 +62,14 @@ data class CloudMediaEntity(
     val syncState: SyncState = SyncState.REMOTE_ONLY,
     @ColumnInfo(defaultValue = "")
     val localCopyPath: String = "",
+    /**
+     * True only when [localCopyPath] points at a file the app itself downloaded
+     * (CloudDownloadWorker). Upload paths also fill [localCopyPath] — with the user's
+     * ORIGINAL file — so this flag is what makes "delete local copies on remote delete"
+     * safe: it can never select user-owned media.
+     */
+    @ColumnInfo(defaultValue = "0")
+    val appLocalCopy: Boolean = false,
     val contentHash: String? = null,
     val thumbnailUrl: String = "",
     val originalUrl: String = "",

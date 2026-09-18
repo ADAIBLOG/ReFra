@@ -361,7 +361,9 @@ data class CloudConfigEntry(
     val verboseLogging: Boolean = false,
     val syncRemoteDeletions: Boolean = false,
     val preferRemoteImages: Boolean = false,
-    val readOnlyMode: Boolean = false
+    val readOnlyMode: Boolean = false,
+    val downloadRemoteEnabled: Boolean = false,
+    val downloadVideos: Boolean = true
 )
 
 /** A vault and the metadata of all media it contains. Binary content is stored separately in the archive. */

@@ -1118,7 +1118,9 @@ class ConfigBackupManager @Inject constructor(
         verboseLogging = verboseLogging,
         syncRemoteDeletions = syncRemoteDeletions,
         preferRemoteImages = preferRemoteImages,
-        readOnlyMode = readOnlyMode
+        readOnlyMode = readOnlyMode,
+        downloadRemoteEnabled = downloadRemoteEnabled,
+        downloadVideos = downloadVideos
     )
 
     private fun CloudConfigEntry.toEntity(
@@ -1158,7 +1160,9 @@ class ConfigBackupManager @Inject constructor(
         verboseLogging = verboseLogging,
         syncRemoteDeletions = syncRemoteDeletions,
         preferRemoteImages = preferRemoteImages,
-        readOnlyMode = readOnlyMode
+        readOnlyMode = readOnlyMode,
+        downloadRemoteEnabled = downloadRemoteEnabled,
+        downloadVideos = downloadVideos
     )
 
     private fun Media.EncryptedMedia2.toEntry(fileName: String) = VaultMediaEntry(

@@ -110,7 +110,10 @@ data class CloudServerConfig(
     val verboseLogging: Boolean = false,
     val syncRemoteDeletions: Boolean = false,
     val preferRemoteImages: Boolean = false,
-    val readOnlyMode: Boolean = false
+    val readOnlyMode: Boolean = false,
+    // Download settings (remote -> local)
+    val downloadRemoteEnabled: Boolean = false,
+    val downloadVideos: Boolean = true
 )
 
 @Serializable

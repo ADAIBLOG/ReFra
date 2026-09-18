@@ -5,6 +5,7 @@
 
 package com.dot.gallery.cloud.data.repository
 
+import android.content.Context
 import android.net.Uri
 import com.dot.gallery.cloud.core.CloudAlbum
 import com.dot.gallery.cloud.core.CloudMapMarker
@@ -31,11 +32,17 @@ import com.dot.gallery.cloud.core.capabilities.RemoteNameConflictPolicy
 import com.dot.gallery.cloud.core.capabilities.ShareLinkCapableProvider
 import com.dot.gallery.cloud.core.capabilities.SmartSearchCapableProvider
 import com.dot.gallery.cloud.core.capabilities.SyncCapableProvider
+import com.dot.gallery.cloud.core.capabilities.SyncDelta
 import com.dot.gallery.cloud.data.dao.CloudMediaDao
+import com.dot.gallery.cloud.data.dao.CloudServerConfigDao
+import com.dot.gallery.cloud.data.dao.SyncStateDao
 import com.dot.gallery.cloud.data.dao.CloudTagDao
 import com.dot.gallery.cloud.data.entity.CloudMediaEntity
+import com.dot.gallery.cloud.data.entity.SyncStateEntity
+import com.dot.gallery.cloud.sync.applyCloudSyncDelta
 import com.dot.gallery.cloud.network.ServerUrlResolver
 import com.dot.gallery.core.Resource
+import dagger.hilt.android.qualifiers.ApplicationContext
 import com.dot.gallery.feature_node.domain.model.Media
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -50,6 +57,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -146,7 +154,10 @@ class CloudRepositoryImpl @Inject constructor(
     private val registry: ProviderRegistry,
     private val cloudMediaDao: CloudMediaDao,
     private val cloudTagDao: CloudTagDao,
-    private val urlResolver: ServerUrlResolver
+    private val urlResolver: ServerUrlResolver,
+    private val configDao: CloudServerConfigDao,
+    private val syncStateDao: SyncStateDao,
+    @param:ApplicationContext private val context: Context
 ) : CloudRepository {
 
     private val _connectionStates = MutableStateFlow<Map<ProviderType, ConnectionState>>(emptyMap())
@@ -382,13 +393,52 @@ class CloudRepositoryImpl @Inject constructor(
         return provider.downloadAsset(remoteId)
     }
 
-    override suspend fun getChangedSince(
+    override suspend fun getSyncDelta(
         type: ProviderType,
-        timestamp: Long
-    ): Result<List<CloudMediaEntity>> {
+        timestamp: Long,
+        reconcileIndex: Boolean
+    ): Result<SyncDelta> {
         val provider = registry.get(type) as? SyncCapableProvider
             ?: return Result.failure(Exception("Provider does not support sync"))
-        return provider.getChangedSince(timestamp)
+        return provider.getSyncDelta(timestamp, reconcileIndex)
+    }
+
+    override suspend fun syncAllRemoteChanges(): Result<Int> = runCatching {
+        var changed = 0
+        // Pull-to-refresh is a user-initiated "give me everything now" — every active
+        // account reconciles its full index (reconcileIndex = true) so remote adds,
+        // edits AND deletions land in one pass, not on the periodic cadence.
+        val configs = configDao.getAll().first().filter { it.isActive }
+        for (config in configs) {
+            val provider = registry.getByConfigId(config.id) as? RemoteMediaProvider ?: continue
+            if (!provider.isAvailable) continue
+            val syncProvider = provider as? SyncCapableProvider ?: continue
+            try {
+                val previousState = syncStateDao.get(config.providerType, config.id)
+                val now = System.currentTimeMillis()
+                val delta = syncProvider.getSyncDelta(
+                    previousState?.lastSyncTimestamp ?: 0L,
+                    reconcileIndex = true
+                ).getOrElse { continue }
+                applyCloudSyncDelta(context, cloudMediaDao, config, delta)
+                changed += delta.changedCount
+                syncStateDao.upsert(
+                    (previousState ?: SyncStateEntity(
+                        providerType = config.providerType,
+                        serverConfigId = config.id
+                    )).copy(
+                        lastSyncTimestamp = now,
+                        lastSyncCursor = now.toString(),
+                        lastError = null
+                    )
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // One account's failure must not starve the others on a manual refresh.
+            }
+        }
+        changed
     }
 
     // === Search ===

@@ -10,6 +10,27 @@ import com.dot.gallery.cloud.core.MediaCapabilityProvider
 import com.dot.gallery.cloud.data.entity.CloudMediaEntity
 import com.dot.gallery.feature_node.domain.model.Media
 
+/**
+ * Result of a provider delta/index fetch.
+ *
+ * [items] are the assets that were added or changed since the watermark (or the whole
+ * index for providers without a delta API). [deletedRemoteIds] carries ids the provider
+ * reports as deleted since the watermark when it has a real deletion channel (e.g.
+ * Immich's delta-sync endpoint). [completeRemoteIds] is non-null only when the provider
+ * enumerated its ENTIRE remote index this run — callers must reconcile the local Room
+ * cache against it (rows absent from the list are stale). It must stay null when the
+ * enumeration was partial or aborted mid-scan, otherwise a transient error would wipe
+ * the cache.
+ */
+data class SyncDelta(
+    val items: List<CloudMediaEntity>,
+    val deletedRemoteIds: List<String> = emptyList(),
+    val completeRemoteIds: List<String>? = null
+) {
+    /** Number of upserted + provider-reported deleted rows (pruned-by-index rows not included). */
+    val changedCount: Int get() = items.size + deletedRemoteIds.size
+}
+
 interface SyncCapableProvider : MediaCapabilityProvider {
     val maxConcurrentUploads: Int get() = 1
     val requiresUploadChecksum: Boolean get() = false
@@ -26,7 +47,16 @@ interface SyncCapableProvider : MediaCapabilityProvider {
     ): Result<CloudMediaEntity> = uploadAsset(localMedia, targetPath)
 
     suspend fun downloadAsset(remoteId: String): Result<Uri>
-    suspend fun getChangedSince(timestamp: Long): Result<List<CloudMediaEntity>>
+
+    /**
+     * Fetches remote changes since [timestamp]. When [reconcileIndex] is true the
+     * provider should additionally produce a complete remote-id index (if it can do so
+     * reliably) so the caller can prune rows whose remote file vanished. Providers with
+     * a cheap full scan (WebDAV, SMB, NFS) always report a complete index and may
+     * ignore the flag; providers with an expensive index (Immich) honour it on the
+     * caller's cadence.
+     */
+    suspend fun getSyncDelta(timestamp: Long, reconcileIndex: Boolean): Result<SyncDelta>
     suspend fun bulkUploadCheck(hashes: List<String>): Result<Map<String, Boolean>>
     suspend fun verifyRemoteContent(
         localMedia: Media,

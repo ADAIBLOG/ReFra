@@ -125,6 +125,22 @@ fun SyncStatusScreen() {
                 }
             }
 
+            if (remoteOnly.isNotEmpty()) {
+                item { Spacer(modifier = Modifier.height(16.dp)) }
+                item {
+                    Button(
+                        onClick = { viewModel.downloadAll() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                    ) {
+                        Icon(Icons.Outlined.CloudDone, contentDescription = null)
+                        Spacer(modifier = Modifier.size(8.dp))
+                        Text(stringResource(R.string.cloud_download_all))
+                    }
+                }
+            }
+
             item { Spacer(modifier = Modifier.height(16.dp)) }
             item {
                 Button(

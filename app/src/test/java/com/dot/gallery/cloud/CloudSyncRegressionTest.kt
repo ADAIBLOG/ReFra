@@ -19,7 +19,9 @@ import com.dot.gallery.cloud.sync.cloudSyncScheduleChanged
 import com.dot.gallery.cloud.sync.cloudSyncSchedulePlan
 import com.dot.gallery.cloud.sync.fetchAllCloudIndexPages
 import com.dot.gallery.cloud.sync.fetchCloudIndexPage
+import com.dot.gallery.cloud.sync.isCloudReconcileDue
 import com.dot.gallery.cloud.sync.isCloudSyncDue
+import com.dot.gallery.cloud.sync.localCopyMediaStoreId
 import com.dot.gallery.cloud.sync.shouldStartCloudIndex
 import com.dot.gallery.cloud.sync.syncIncrementally
 import com.dot.gallery.cloud.ui.AddServerUiState
@@ -65,7 +67,9 @@ class CloudSyncRegressionTest {
             verboseLogging = true,
             syncRemoteDeletions = true,
             preferRemoteImages = true,
-            readOnlyMode = true
+            readOnlyMode = true,
+            downloadRemoteEnabled = true,
+            downloadVideos = false
         )
         val state = AddServerUiState(
             providerType = ProviderType.IMMICH,
@@ -152,10 +156,37 @@ class CloudSyncRegressionTest {
             CloudSyncSchedulePlan(
                 intervalMinutes = 30L,
                 syncWifiOnly = false,
-                uploadWifiOnly = false
+                uploadWifiOnly = false,
+                downloadWifiOnly = null
             ),
             cloudSyncSchedulePlan(configs)
         )
+    }
+
+    @Test
+    fun downloadOnlyAccountKeepsSchedulerAlive() {
+        val configs = listOf(
+            config(id = 1L, intervalMinutes = 60, wifiOnly = true).copy(syncEnabled = false),
+            config(id = 2L, intervalMinutes = 45, wifiOnly = false).copy(
+                syncEnabled = false, downloadRemoteEnabled = true
+            )
+        )
+
+        val plan = cloudSyncSchedulePlan(configs)
+
+        assertEquals(45L, plan?.intervalMinutes)
+        assertEquals(false, plan?.downloadWifiOnly)
+    }
+
+    @Test
+    fun downloadWorkerUsesWifiOnlyWhenEveryDownloadAccountRestrictsCellular() {
+        val configs = listOf(
+            config(id = 1L, intervalMinutes = 60, wifiOnly = true).copy(
+                downloadRemoteEnabled = true
+            )
+        )
+
+        assertEquals(true, cloudSyncSchedulePlan(configs)?.downloadWifiOnly)
     }
 
     @Test
@@ -186,6 +217,34 @@ class CloudSyncRegressionTest {
         assertTrue(cloudSyncScheduleChanged(oldConfig, oldConfig.copy(syncIntervalMinutes = 30)))
         assertTrue(cloudSyncScheduleChanged(oldConfig, oldConfig.copy(requireCharging = true)))
         assertTrue(cloudSyncScheduleChanged(oldConfig, oldConfig.copy(syncAlbums = true)))
+        assertTrue(cloudSyncScheduleChanged(oldConfig, oldConfig.copy(downloadRemoteEnabled = true)))
+        assertFalse(cloudSyncScheduleChanged(oldConfig, oldConfig.copy(downloadVideos = false)))
+    }
+
+    @Test
+    fun reconcileCadenceUsesCursorAndDefaultsToDue() {
+        val dayMs = 24L * 60L * 60_000L
+
+        // Legacy accounts have no cursor — first sync always reconciles the full index.
+        assertTrue(isCloudReconcileDue(lastReconcileCursor = null, now = dayMs))
+        assertTrue(isCloudReconcileDue(lastReconcileCursor = "", now = dayMs))
+        assertTrue(isCloudReconcileDue(lastReconcileCursor = "not-a-number", now = dayMs))
+        assertFalse(isCloudReconcileDue(lastReconcileCursor = "1000", now = 1000 + dayMs - 1))
+        assertTrue(isCloudReconcileDue(lastReconcileCursor = "1000", now = 1000 + dayMs))
+    }
+
+    @Test
+    fun localCopyIdParsesMediaStoreInsertUri() {
+        assertEquals(
+            42L,
+            localCopyMediaStoreId("content://media/external_primary/images/media/42")
+        )
+        assertEquals(
+            7L,
+            localCopyMediaStoreId("content://media/external/file/7")
+        )
+        assertEquals(null, localCopyMediaStoreId(""))
+        assertEquals(null, localCopyMediaStoreId("file:///data/local/x.jpg"))
     }
 
     @Test
@@ -382,7 +441,7 @@ class CloudSyncRegressionTest {
             advanceWatermark = { events += "watermark:$it" }
         )
 
-        assertEquals(Result.success(1), result)
+        assertEquals(Result.success(listOf("change")), result)
         assertEquals(listOf("persist:change", "watermark:200"), events)
     }
 

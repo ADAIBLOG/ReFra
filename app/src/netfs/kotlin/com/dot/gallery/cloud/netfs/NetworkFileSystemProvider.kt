@@ -28,10 +28,12 @@ import com.dot.gallery.cloud.core.capabilities.RemoteAlbumWriteProvider
 import com.dot.gallery.cloud.core.capabilities.RemoteMediaProvider
 import com.dot.gallery.cloud.core.capabilities.RemoteNameConflictPolicy
 import com.dot.gallery.cloud.core.capabilities.ShareLinkCapableProvider
+import com.dot.gallery.cloud.core.capabilities.SyncDelta
 import com.dot.gallery.cloud.core.capabilities.remoteAlbumFilePath
 import com.dot.gallery.cloud.core.capabilities.remoteCopyFileName
 import com.dot.gallery.cloud.data.dao.CloudMediaDao
 import com.dot.gallery.cloud.data.entity.CloudMediaEntity
+import com.dot.gallery.cloud.sync.deleteAppLocalCopies
 import com.dot.gallery.cloud.netfs.bridge.NetFsLoopback
 import com.dot.gallery.cloud.netfs.bridge.NetFsLoopbackSource
 import com.dot.gallery.core.Resource
@@ -208,11 +210,14 @@ open class NetworkFileSystemProvider(
             val configId = currentConfig?.id ?: 0L
             val index = mediaIndex(conn)
             if (page == 0 && configId > 0L) {
-                cloudMediaDao.deleteMissingRemoteMedia(
+                val pruned = cloudMediaDao.deleteMissingRemoteMedia(
                     configId,
                     backend.providerType,
                     index.inAlbum("").map { it.relativePath }
                 )
+                if (currentConfig?.syncRemoteDeletions == true && pruned.isNotEmpty()) {
+                    deleteAppLocalCopies(context, pruned)
+                }
             }
             val paged = index.page(page, pageSize).map { it.toEntity(configId) }
             cloudMediaDao.insertAll(paged)
@@ -820,13 +825,22 @@ open class NetworkFileSystemProvider(
         }
     }
 
-    override suspend fun getChangedSince(timestamp: Long): Result<List<CloudMediaEntity>> =
+    override suspend fun getSyncDelta(timestamp: Long, reconcileIndex: Boolean): Result<SyncDelta> =
         withContext(Dispatchers.IO) {
             try {
                 val conn = requireConnection()
                 val configId = currentConfig?.id ?: 0L
                 invalidateMediaIndex()
-                Result.success(mediaIndex(conn).inAlbum("").map { it.toEntity(configId) })
+                // The index is always a complete recursive listing, so the caller can
+                // prune the cache against it on every sync — that's how remote deletions
+                // reach the timeline between full scans.
+                val entities = mediaIndex(conn).inAlbum("").map { it.toEntity(configId) }
+                Result.success(
+                    SyncDelta(
+                        items = entities,
+                        completeRemoteIds = entities.map { it.remoteId }
+                    )
+                )
             } catch (e: Exception) {
                 Result.failure(e)
             }

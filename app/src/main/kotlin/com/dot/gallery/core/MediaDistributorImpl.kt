@@ -482,6 +482,12 @@ class MediaDistributorImpl @Inject constructor(
     }
 
     private suspend fun refreshCloudData() = cloudRefreshMutex.withLock {
+        // First pull every account's remote delta into cloud_media (adds, edits AND
+        // deletions — reconcileIndex forces a complete-index pass). The Room-backed
+        // cloud flow then republishes the unified timeline/album caches instantly.
+        try {
+            cloudRepository.syncAllRemoteChanges()
+        } catch (_: Exception) { }
         try {
             cloudRepository.getAllRemoteAlbums().collect { resource ->
                 when (resource) {

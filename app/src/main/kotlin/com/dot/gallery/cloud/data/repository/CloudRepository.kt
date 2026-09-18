@@ -16,6 +16,7 @@ import com.dot.gallery.cloud.core.ProviderType
 import com.dot.gallery.cloud.core.SharedLinkInfo
 import com.dot.gallery.cloud.core.capabilities.RemoteAlbumCopyResult
 import com.dot.gallery.cloud.core.capabilities.RemoteNameConflictPolicy
+import com.dot.gallery.cloud.core.capabilities.SyncDelta
 import com.dot.gallery.cloud.data.entity.CloudMediaEntity
 import com.dot.gallery.core.Resource
 import com.dot.gallery.feature_node.domain.model.Media
@@ -99,7 +100,20 @@ interface CloudRepository {
         continuationRemoteId: String? = null
     ): RemoteAlbumCopyResult
     suspend fun downloadAsset(type: ProviderType, remoteId: String): Result<android.net.Uri>
-    suspend fun getChangedSince(type: ProviderType, timestamp: Long): Result<List<CloudMediaEntity>>
+    suspend fun getSyncDelta(
+        type: ProviderType,
+        timestamp: Long,
+        reconcileIndex: Boolean = false
+    ): Result<SyncDelta>
+
+    /**
+     * Pull-to-refresh entry point: fetches the full delta with a complete-index
+     * reconcile for every active account, persists upserts + deletions into
+     * `cloud_media` (so Room-backed flows update the timeline/albums instantly), and
+     * advances each account's sync watermark so the periodic worker doesn't redo it.
+     * Returns the number of changed rows across all accounts.
+     */
+    suspend fun syncAllRemoteChanges(): Result<Int>
 
     // Search
     suspend fun search(query: String): Result<List<CloudMediaEntity>>

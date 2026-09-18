@@ -1987,9 +1987,14 @@
     <string name="cloud_adv_troubleshooting">Troubleshooting</string>
     <string name="cloud_adv_verbose">Verbose logging</string>
     <string name="cloud_adv_verbose_summary">Enable detailed logging for debugging</string>
+    <string name="cloud_download_remote">Download remote media</string>
+    <string name="cloud_download_remote_summary">Automatically download this account’s photos to this device</string>
+    <string name="cloud_download_videos">Download videos</string>
+    <string name="cloud_download_videos_summary">Include videos in automatic downloads</string>
+    <string name="cloud_download_all">Download all remote media</string>
     <string name="cloud_adv_sync">Sync</string>
     <string name="cloud_adv_sync_deletions">Sync remote deletions</string>
-    <string name="cloud_adv_sync_deletions_summary">[EXPERIMENTAL] Auto-delete or restore local items when remote changes</string>
+    <string name="cloud_adv_sync_deletions_summary">Delete local copies downloaded by the app when the file is removed on the server</string>
     <string name="cloud_adv_display">Display</string>
     <string name="cloud_adv_prefer_remote">Prefer remote images</string>
     <string name="cloud_adv_prefer_remote_summary">Load cloud thumbnails instead of local copies</string>

@@ -17,6 +17,7 @@ import com.dot.gallery.cloud.core.ProviderType
 import com.dot.gallery.cloud.core.capabilities.RemoteMediaProvider
 import com.dot.gallery.cloud.core.capabilities.SyncCapableProvider
 import com.dot.gallery.cloud.data.dao.CloudMediaDao
+import com.dot.gallery.cloud.sync.CloudMediaStoreWriter
 import com.dot.gallery.core.decoder.format.ImageReencoder
 import com.dot.gallery.core.metadata.MetadataRemovalMode
 import com.dot.gallery.core.metadata.MetadataSaveMode
@@ -280,58 +281,19 @@ class MediaHandlerImpl @Inject constructor(
                 val downloadResult = syncProvider.downloadAsset(remoteId)
                 val cacheUri = downloadResult.getOrNull() ?: continue
 
-                // Save from cache to MediaStore
-                try {
-                    val isVideo = media.mimeType.startsWith("video/")
-                    val collection = if (isVideo) {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-                            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                        else MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-                    } else {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-                            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                        else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-                    }
-                    val relativePath = if (isVideo)
-                        Environment.DIRECTORY_MOVIES + "/Cloud"
-                    else
-                        Environment.DIRECTORY_PICTURES + "/Cloud"
-
-                    val values = ContentValues().apply {
-                        put(MediaStore.MediaColumns.DISPLAY_NAME, media.label)
-                        put(MediaStore.MediaColumns.MIME_TYPE, media.mimeType)
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
-                            put(MediaStore.MediaColumns.IS_PENDING, 1)
-                        }
-                    }
-
-                    val resolver = context.contentResolver
-                    val insertUri = resolver.insert(collection, values) ?: continue
-
-                    resolver.openOutputStream(insertUri)?.use { output ->
-                        resolver.openInputStream(cacheUri)?.use { input ->
-                            input.copyTo(output)
-                        }
-                    }
-
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        values.clear()
-                        values.put(MediaStore.MediaColumns.IS_PENDING, 0)
-                        resolver.update(insertUri, values, null, null)
-                    }
-
-                    // Clean up cache file
-                    try {
-                        resolver.delete(cacheUri, null, null)
-                    } catch (_: Exception) {
-                        // Cache file may be a plain file, not a content URI
-                        java.io.File(cacheUri.path ?: "").delete()
-                    }
-
+                // Save from cache to MediaStore via the shared writer used by the
+                // automatic download worker.
+                val insertUri = CloudMediaStoreWriter.write(
+                    context = context,
+                    source = cacheUri,
+                    request = CloudMediaStoreWriter.Request(
+                        displayName = media.label,
+                        mimeType = media.mimeType
+                    )
+                )
+                if (insertUri != null) {
+                    CloudMediaStoreWriter.deleteSource(context, cacheUri)
                     successCount++
-                } catch (_: Exception) {
-                    continue
                 }
             }
             Result.success(successCount)

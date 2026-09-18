@@ -26,7 +26,8 @@ data class CloudMediaLocalState(
     val localCopyPath: String,
     val size: Long,
     val timestamp: Long,
-    val syncState: SyncState
+    val syncState: SyncState,
+    val appLocalCopy: Boolean = false
 )
 
 data class CloudMediaRemoteRevision(
@@ -137,12 +138,47 @@ interface CloudMediaDao {
 
     @Query(
         """
-        SELECT remoteId, providerType, serverConfigId, localCopyPath, size, timestamp, syncState
+        SELECT remoteId, providerType, serverConfigId, localCopyPath, size, timestamp, syncState,
+            appLocalCopy
         FROM cloud_media
         WHERE serverConfigId = :configId AND localCopyPath != '' AND remoteId IN (:remoteIds)
         """
     )
     suspend fun getLocalStates(configId: Long, remoteIds: List<String>): List<CloudMediaLocalState>
+
+    @Query(
+        """
+        SELECT remoteId, providerType, serverConfigId, localCopyPath, size, timestamp, syncState,
+            appLocalCopy
+        FROM cloud_media
+        WHERE providerType = :providerType AND serverConfigId = :serverConfigId
+            AND appLocalCopy = 1 AND remoteId IN (:remoteIds)
+        """
+    )
+    suspend fun getLocalCopyStates(
+        providerType: ProviderType,
+        serverConfigId: Long,
+        remoteIds: List<String>
+    ): List<CloudMediaLocalState>
+
+    @Query(
+        """
+        SELECT remoteId, providerType, serverConfigId, localCopyPath, size, timestamp, syncState,
+            appLocalCopy
+        FROM cloud_media
+        WHERE serverConfigId = :configId AND appLocalCopy = 1
+        """
+    )
+    suspend fun getLocalCopyStatesForConfig(configId: Long): List<CloudMediaLocalState>
+
+    @Query(
+        """
+        SELECT * FROM cloud_media
+        WHERE serverConfigId = :configId AND syncState = :state AND trashed = 0
+        ORDER BY timestamp DESC
+        """
+    )
+    suspend fun getBySyncStateForConfig(configId: Long, state: SyncState): List<CloudMediaEntity>
 
     @Query("SELECT * FROM cloud_media WHERE favorite = 1 AND trashed = 0 AND archived = 0 ORDER BY timestamp DESC")
     fun getFavorites(): Flow<List<CloudMediaEntity>>
@@ -312,7 +348,8 @@ interface CloudMediaDao {
                             localCopyPath = local.localCopyPath,
                             size = local.size,
                             timestamp = local.timestamp,
-                            syncState = local.syncState
+                            syncState = local.syncState,
+                            appLocalCopy = local.appLocalCopy
                         )
                     }
                 )
@@ -394,7 +431,7 @@ interface CloudMediaDao {
 
     @Query(
         """
-        UPDATE cloud_media SET localCopyPath = :path, syncState = :state
+        UPDATE cloud_media SET localCopyPath = :path, syncState = :state, appLocalCopy = :appOwned
         WHERE remoteId = :remoteId AND providerType = :providerType AND serverConfigId = :serverConfigId
         """
     )
@@ -403,7 +440,8 @@ interface CloudMediaDao {
         providerType: ProviderType,
         serverConfigId: Long,
         path: String,
-        state: SyncState
+        state: SyncState,
+        appOwned: Boolean = true
     )
 
     @Query(
@@ -438,20 +476,47 @@ interface CloudMediaDao {
         remoteIds: List<String>
     )
 
+    /**
+     * Prunes cached rows whose remote id is absent from [currentRemoteIds] (a complete
+     * remote index — never call this with a partial listing). Returns the local-copy
+     * states of the pruned rows so the caller can optionally remove the files the app
+     * itself downloaded ("sync remote deletions").
+     */
     @Transaction
     suspend fun deleteMissingRemoteMedia(
         serverConfigId: Long,
         providerType: ProviderType,
         currentRemoteIds: Collection<String>
-    ) {
+    ): List<CloudMediaLocalState> {
         val current = currentRemoteIds.toHashSet()
-        getRemoteIds(providerType, serverConfigId)
-            .filterNot(current::contains)
-            .chunked(900)
-            .forEach { remoteIds ->
-                deleteBackupRevisionsByRemoteIds(serverConfigId, remoteIds)
-                deleteByRemoteIdsRaw(providerType, serverConfigId, remoteIds)
-            }
+        val stale = getRemoteIds(providerType, serverConfigId).filterNot(current::contains)
+        return deleteStaleRemoteIds(providerType, serverConfigId, stale)
+    }
+
+    /**
+     * Deletes the given remote ids (provider-reported deletions). Returns the local-copy
+     * states of the removed rows, same contract as [deleteMissingRemoteMedia].
+     */
+    @Transaction
+    suspend fun deleteByRemoteIds(
+        providerType: ProviderType,
+        serverConfigId: Long,
+        remoteIds: List<String>
+    ): List<CloudMediaLocalState> = deleteStaleRemoteIds(providerType, serverConfigId, remoteIds)
+
+    private suspend fun deleteStaleRemoteIds(
+        providerType: ProviderType,
+        serverConfigId: Long,
+        staleRemoteIds: List<String>
+    ): List<CloudMediaLocalState> {
+        if (staleRemoteIds.isEmpty()) return emptyList()
+        val localStates = staleRemoteIds.chunked(900)
+            .flatMap { getLocalCopyStates(providerType, serverConfigId, it) }
+        staleRemoteIds.chunked(900).forEach { remoteIds ->
+            deleteBackupRevisionsByRemoteIds(serverConfigId, remoteIds)
+            deleteByRemoteIdsRaw(providerType, serverConfigId, remoteIds)
+        }
+        return localStates
     }
 
     @Query(

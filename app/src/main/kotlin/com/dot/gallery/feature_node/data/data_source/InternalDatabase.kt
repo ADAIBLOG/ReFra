@@ -109,7 +109,7 @@ import com.dot.gallery.feature_node.domain.util.Converters
         CloudTagEntity::class,
         CloudMediaTagEntity::class
     ],
-    version = 47,
+    version = 48,
     exportSchema = true,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
@@ -161,6 +161,7 @@ import com.dot.gallery.feature_node.domain.util.Converters
         // Migrations 43 to 45 are handled manually in CloudAlbumSyncPkMigration.kt
         // Migration 45 to 46 is handled manually in CaptureTimeMigration.kt
         // Migration 46 to 47 is handled manually in CloudTagMigration.kt
+        AutoMigration(from = 47, to = 48), // cloud_server_config.downloadRemoteEnabled/downloadVideos
     ]
 )
 @TypeConverters(Converters::class, CloudConverters::class, SmartScanConverters::class)

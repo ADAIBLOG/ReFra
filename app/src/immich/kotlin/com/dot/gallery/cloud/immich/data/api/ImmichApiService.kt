@@ -10,6 +10,7 @@ import com.dot.gallery.cloud.immich.data.dto.ImmichAssetDto
 import com.dot.gallery.cloud.immich.data.dto.ImmichAssetMediaResponseDto
 import com.dot.gallery.cloud.immich.data.dto.ImmichBulkUploadCheckDto
 import com.dot.gallery.cloud.immich.data.dto.ImmichBulkUploadCheckResultDto
+import com.dot.gallery.cloud.immich.data.dto.ImmichDeltaSyncResponseDto
 import com.dot.gallery.cloud.immich.data.dto.ImmichLoginDto
 import com.dot.gallery.cloud.immich.data.dto.ImmichLoginResponseDto
 import com.dot.gallery.cloud.immich.data.dto.ImmichMapMarkerDto
@@ -64,6 +65,18 @@ interface ImmichApiService {
     suspend fun searchAssets(
         @Body body: Map<String, @JvmSuppressWildcards Any>
     ): Response<ImmichSearchResponseDto>
+
+    /**
+     * Immich asset delta channel (`AssetDeltaSyncDto`/`AssetDeltaSyncResponseDto`):
+     * returns assets added/updated since `updatedAfter` plus the ids deleted since
+     * then — the only endpoint that can report remote deletions without a full scan.
+     * Absent on old servers (pre sync-v1) and superseded by `sync/stream` on the newest
+     * ones; non-2xx answers must fall back to a metadata-search delta.
+     */
+    @POST("api/sync/delta-sync")
+    suspend fun deltaSync(
+        @Body body: Map<String, @JvmSuppressWildcards Any>
+    ): Response<ImmichDeltaSyncResponseDto>
 
     @GET("api/assets/{id}")
     suspend fun getAssetById(@Path("id") id: String): Response<ImmichAssetDto>

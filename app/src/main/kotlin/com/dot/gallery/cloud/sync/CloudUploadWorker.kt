@@ -171,6 +171,13 @@ class CloudUploadWorker @AssistedInject constructor(
                 ).map { backupLocalRevisionKey(it.localUri, it.localSize, it.localTimestamp) }
                     .toSet()
                 val cachedRemoteRevisions = emptySet<String>()
+                // Loop prevention: files this app itself downloaded from the account are
+                // recorded in cloud_media.localCopyPath. If such a copy sits inside a
+                // backup-enabled album it must never be re-uploaded — the MediaStore row
+                // id is the stable key (URI strings differ between insert and query).
+                val downloadedCopyIds = cloudMediaDao.getLocalCopyStatesForConfig(config.id)
+                    .mapNotNull { localCopyMediaStoreId(it.localCopyPath) }
+                    .toSet()
 
                 for (pref in enabledPrefs) {
                     // Path-based stores (WebDAV/ownCloud/Nextcloud/SMB/NFS) mirror each
@@ -194,7 +201,7 @@ class CloudUploadWorker @AssistedInject constructor(
                     }
 
                     val candidates = albumMedia.filterNot { media ->
-                        isBackupRevisionCached(
+                        media.id in downloadedCopyIds || isBackupRevisionCached(
                             uri = backupRevisionLocalUri(
                                 media.getUri().toString(),
                                 syncProvider.deterministicRemoteId(media, albumTarget)

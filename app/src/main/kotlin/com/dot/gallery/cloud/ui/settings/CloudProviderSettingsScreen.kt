@@ -176,6 +176,10 @@ fun CloudProviderSettingsScreen(
     val syncIntervalSummary = syncIntervalLabel(config.syncIntervalMinutes)
     val wifiOnlyTitle = stringResource(R.string.cloud_sync_wifi_only)
     val wifiOnlySummary = stringResource(R.string.cloud_wifi_only_summary)
+    val downloadRemoteTitle = stringResource(R.string.cloud_download_remote)
+    val downloadRemoteSummary = stringResource(R.string.cloud_download_remote_summary)
+    val downloadVideosTitle = stringResource(R.string.cloud_download_videos)
+    val downloadVideosSummary = stringResource(R.string.cloud_download_videos_summary)
     val backupAlbumsTitle = stringResource(R.string.cloud_backup_albums)
     val selectAlbumsSummary = stringResource(R.string.cloud_backup_select_albums)
     val backupOptionsTitle = stringResource(R.string.cloud_backup_options)
@@ -207,6 +211,10 @@ fun CloudProviderSettingsScreen(
         syncIntervalSummary,
         wifiOnlyTitle,
         wifiOnlySummary,
+        downloadRemoteTitle,
+        downloadRemoteSummary,
+        downloadVideosTitle,
+        downloadVideosSummary,
         backupAlbumsTitle,
         selectAlbumsSummary,
         backupOptionsTitle,
@@ -271,6 +279,33 @@ fun CloudProviderSettingsScreen(
                     isChecked = config.wifiOnly,
                     onCheck = { checked ->
                         viewModel.updateConfigById(configId) { copy(wifiOnly = checked) }
+                    },
+                    screenPosition = Position.Bottom
+                )
+            )
+        }
+
+        // Remote -> local downloads
+        items.add(
+            SettingsEntity.SwitchPreference(
+                title = downloadRemoteTitle,
+                summary = downloadRemoteSummary,
+                isChecked = config.downloadRemoteEnabled,
+                onCheck = { checked ->
+                    viewModel.updateConfigById(configId) { copy(downloadRemoteEnabled = checked) }
+                    if (checked) viewModel.triggerDownload(configId)
+                },
+                screenPosition = if (config.downloadRemoteEnabled) Position.Top else Position.Alone
+            )
+        )
+        if (config.downloadRemoteEnabled) {
+            items.add(
+                SettingsEntity.SwitchPreference(
+                    title = downloadVideosTitle,
+                    summary = downloadVideosSummary,
+                    isChecked = config.downloadVideos,
+                    onCheck = { checked ->
+                        viewModel.updateConfigById(configId) { copy(downloadVideos = checked) }
                     },
                     screenPosition = Position.Bottom
                 )

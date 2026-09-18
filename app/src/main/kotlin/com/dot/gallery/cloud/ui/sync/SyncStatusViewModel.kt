@@ -7,11 +7,13 @@ package com.dot.gallery.cloud.ui.sync
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.WorkManager
 import com.dot.gallery.cloud.core.ProviderRegistry
 import com.dot.gallery.cloud.core.ProviderType
 import com.dot.gallery.cloud.core.SyncState
 import com.dot.gallery.cloud.data.dao.CloudMediaDao
 import com.dot.gallery.cloud.data.repository.CloudRepository
+import com.dot.gallery.cloud.sync.CloudDownloadWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -37,7 +39,8 @@ data class SyncStatusUiState(
 class SyncStatusViewModel @Inject constructor(
     private val repository: CloudRepository,
     private val registry: ProviderRegistry,
-    private val cloudMediaDao: CloudMediaDao
+    private val cloudMediaDao: CloudMediaDao,
+    private val workManager: WorkManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SyncStatusUiState())
@@ -72,6 +75,11 @@ class SyncStatusViewModel @Inject constructor(
                 )
             }
         }
+    }
+
+    /** Enqueues a one-time pass that downloads every REMOTE_ONLY item across enabled accounts. */
+    fun downloadAll() {
+        CloudDownloadWorker.triggerNow(workManager)
     }
 
     fun triggerSync() {
