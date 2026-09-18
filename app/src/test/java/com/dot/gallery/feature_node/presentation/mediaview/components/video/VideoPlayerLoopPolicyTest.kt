@@ -84,9 +84,10 @@ class VideoPlayerLoopPolicyTest {
     }
 
     @Test
-    fun storyVideoUsesCompositedTextureOutput() {
-        assertTrue(shouldUseTextureVideoOutput(storyActive = true))
-        assertFalse(shouldUseTextureVideoOutput(storyActive = false))
+    fun storyAndOverlayVideosUseCompositedTextureOutput() {
+        assertTrue(shouldUseTextureVideoOutput(storyActive = true, compositedOutput = false))
+        assertTrue(shouldUseTextureVideoOutput(storyActive = false, compositedOutput = true))
+        assertFalse(shouldUseTextureVideoOutput(storyActive = false, compositedOutput = false))
     }
 
     @Test

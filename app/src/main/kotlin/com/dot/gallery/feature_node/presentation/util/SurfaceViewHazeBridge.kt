@@ -10,6 +10,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.view.PixelCopy
 import android.view.SurfaceView
+import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
 import androidx.compose.foundation.layout.Box
@@ -32,13 +33,15 @@ import kotlinx.coroutines.delay
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Finds the first [SurfaceView] descendant in a view hierarchy.
+ * Finds the first video output descendant in a view hierarchy — either a [SurfaceView]
+ * (captured via [PixelCopy]) or a [TextureView] (captured via [TextureView.getBitmap],
+ * which needs no surface access).
  */
-private fun View.findSurfaceView(): SurfaceView? {
-    if (this is SurfaceView) return this
+private fun View.findVideoOutputView(): View? {
+    if (this is SurfaceView || this is TextureView) return this
     if (this is ViewGroup) {
         for (i in 0 until childCount) {
-            val found = getChildAt(i).findSurfaceView()
+            val found = getChildAt(i).findVideoOutputView()
             if (found != null) return found
         }
     }
@@ -46,10 +49,11 @@ private fun View.findSurfaceView(): SurfaceView? {
 }
 
 /**
- * Captures a [SurfaceView]'s content via [PixelCopy] into a tiny bitmap (~48 px wide)
- * at high frequency (~50 ms). The bitmap is so small (~7 KB) that PixelCopy is near-free.
+ * Captures a video output view's content into a tiny bitmap (~48 px wide) at high
+ * frequency (~50 ms) — [SurfaceView] via [PixelCopy], [TextureView] via
+ * [TextureView.getBitmap]. The bitmap is so small (~7 KB) that capture is near-free.
  *
- * @param view       View (or parent) whose first SurfaceView descendant is captured.
+ * @param view       View (or parent) whose first SurfaceView/TextureView descendant is captured.
  * @param enabled    Toggle capture on/off.
  * @param captureWidth Target width in pixels. Height is derived from aspect ratio.
  * @param intervalMs Milliseconds between capture attempts.
@@ -83,7 +87,7 @@ fun rememberSurfaceCapture(
             return@LaunchedEffect
         }
 
-        val surfaceView = view.findSurfaceView() ?: return@LaunchedEffect
+        val outputView = view.findVideoOutputView() ?: return@LaunchedEffect
         val capturing = AtomicBoolean(false)
         var reusableBitmap: Bitmap? = null
 
@@ -92,33 +96,57 @@ fun rememberSurfaceCapture(
             // frame so a currently-visible blur does not disappear. Resumes on the next
             // tick once re-enabled.
             if (enabledState.value && !capturing.get()) {
-                val w = surfaceView.width
-                val h = surfaceView.height
+                val w = outputView.width
+                val h = outputView.height
                 if (w > 0 && h > 0) {
                     val destW = captureWidth
                     val destH = (captureWidth * h.toFloat() / w).toInt().coerceAtLeast(1)
 
-                    val dest = reusableBitmap?.takeIf { it.width == destW && it.height == destH }
-                        ?: createBitmap(destW, destH).also {
-                            reusableBitmap = it
+                    when (outputView) {
+                        is SurfaceView -> {
+                            val dest =
+                                reusableBitmap?.takeIf { it.width == destW && it.height == destH }
+                                    ?: createBitmap(destW, destH).also {
+                                        reusableBitmap = it
+                                    }
+
+                            capturing.set(true)
+                            try {
+                                PixelCopy.request(
+                                    outputView,
+                                    Rect(0, 0, w, h),
+                                    dest,
+                                    { result ->
+                                        if (result == PixelCopy.SUCCESS) {
+                                            state.value = dest.asImageBitmap()
+                                        }
+                                        capturing.set(false)
+                                    },
+                                    pixelCopyHandler
+                                )
+                            } catch (_: Exception) {
+                                capturing.set(false)
+                            }
                         }
 
-                    capturing.set(true)
-                    try {
-                        PixelCopy.request(
-                            surfaceView,
-                            Rect(0, 0, w, h),
-                            dest,
-                            { result ->
-                                if (result == PixelCopy.SUCCESS) {
-                                    state.value = dest.asImageBitmap()
+                        is TextureView -> {
+                            // PixelCopy can't see a TextureView (no underlying Surface), so
+                            // read its current frame directly — cheap at ~48 px wide, and the
+                            // blocking readback stays off the UI thread on the handler.
+                            capturing.set(true)
+                            pixelCopyHandler.post {
+                                try {
+                                    if (outputView.isAvailable) {
+                                        outputView.getBitmap(destW, destH)?.let {
+                                            state.value = it.asImageBitmap()
+                                        }
+                                    }
+                                } catch (_: Exception) {
+                                } finally {
+                                    capturing.set(false)
                                 }
-                                capturing.set(false)
-                            },
-                            pixelCopyHandler
-                        )
-                    } catch (_: Exception) {
-                        capturing.set(false)
+                            }
+                        }
                     }
                 }
             }

@@ -87,7 +87,10 @@ import kotlinx.coroutines.launch
 internal fun shouldPlayVideoOnce(slideshowActive: Boolean, storyActive: Boolean): Boolean =
     slideshowActive || storyActive
 
-internal fun shouldUseTextureVideoOutput(storyActive: Boolean): Boolean = storyActive
+internal fun shouldUseTextureVideoOutput(
+    storyActive: Boolean,
+    compositedOutput: Boolean,
+): Boolean = storyActive || compositedOutput
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -98,10 +101,12 @@ fun <T : Media> VideoPlayer(
     videoController: @Composable (ExoPlayer, MutableState<Boolean>, MutableLongState, Long, Int, Float, VideoControllerState) -> Unit,
     onItemClick: () -> Unit,
     onSwipeDown: () -> Unit,
+    swipeToDismissEnabled: Boolean = true,
     onZoomChange: (Boolean) -> Unit = {},
     captureBlur: Boolean = true,
     slideshowActive: Boolean = false,
     storyActive: Boolean = false,
+    compositedOutput: Boolean = storyActive,
     onLoadFailed: () -> Unit = {},
     onVideoEnded: () -> Unit = {}
 ) {
@@ -359,7 +364,7 @@ fun <T : Media> VideoPlayer(
                     } while (event.changes.any { it.pressed })
                 }
             }
-            .swipe(enabled = !isZoomed, onSwipeDown = updatedOnSwipeDown)
+            .swipe(enabled = !isZoomed && swipeToDismissEnabled, onSwipeDown = updatedOnSwipeDown)
             .onVisibilityChanged(
                 minFractionVisible = 0.2f
             ) { isVisible ->
@@ -396,10 +401,10 @@ fun <T : Media> VideoPlayer(
                 }
             }
             // Recreate the surface per media so a switched group member binds to its own player.
-            key(media.id, storyActive) {
+            key(media.id, storyActive, compositedOutput) {
                 AndroidView(
                     factory = { ctx ->
-                        if (shouldUseTextureVideoOutput(storyActive)) {
+                        if (shouldUseTextureVideoOutput(storyActive, compositedOutput)) {
                             TextureView(ctx).also {
                                 it.isOpaque = false
                                 surfaceViewRef = it

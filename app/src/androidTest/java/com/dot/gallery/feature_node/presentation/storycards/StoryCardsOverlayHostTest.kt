@@ -38,10 +38,10 @@ class StoryCardsOverlayHostTest {
                     paddingValues = PaddingValues(),
                     isScrolling = false,
                     overlayVisible = true,
-                    overlayContent = {
+                    overlayContent = { _, _ ->
                         Box(Modifier.fillMaxSize())
                     },
-                ) {
+                ) { _ ->
                     Box(Modifier.fillMaxSize()) {
                         Text("Underlying content")
                     }

@@ -5,6 +5,9 @@
 
 package com.dot.gallery.feature_node.presentation.storycards.components
 
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -52,6 +55,7 @@ import com.dot.gallery.R
 import com.dot.gallery.feature_node.domain.model.StoryCard
 import com.dot.gallery.feature_node.domain.model.StoryCardType
 import com.dot.gallery.feature_node.domain.util.getUri
+import com.dot.gallery.feature_node.presentation.util.storyCardSharedElement
 import com.github.panpf.sketch.AsyncImage
 import com.github.panpf.sketch.request.ComposableImageRequest
 import com.github.panpf.sketch.resize.Precision
@@ -60,10 +64,13 @@ import com.dot.gallery.ui.theme.BlackScrim
 const val StoryCardsRowTag = "StoryCards.Row"
 fun storyCardTag(id: Long) = "StoryCards.Card.$id"
 
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun StoryCardsRow(
     cards: List<StoryCard>,
     onCardClick: (card: StoryCard) -> Unit,
+    sharedTransitionScope: SharedTransitionScope? = null,
+    animatedVisibilityScope: AnimatedVisibilityScope? = null,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(horizontal = 16.dp)
 ) {
@@ -78,10 +85,22 @@ fun StoryCardsRow(
             items = cards,
             key = { card -> card.id }
         ) { card ->
+            val sharedModifier = if (
+                sharedTransitionScope != null && animatedVisibilityScope != null
+            ) {
+                with(sharedTransitionScope) {
+                    Modifier.storyCardSharedElement(
+                        cardId = card.id,
+                        animatedVisibilityScope = animatedVisibilityScope,
+                    )
+                }
+            } else {
+                Modifier
+            }
             StoryCardItem(
                 card = card,
                 onClick = { onCardClick(card) },
-                modifier = Modifier.testTag(storyCardTag(card.id)),
+                modifier = sharedModifier.testTag(storyCardTag(card.id)),
             )
         }
     }

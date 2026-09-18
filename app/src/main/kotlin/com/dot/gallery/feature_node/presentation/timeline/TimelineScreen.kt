@@ -342,6 +342,8 @@ fun TimelineScreen(
                         onCardClick = { card ->
                             storyCardsViewModel?.prepareViewer(card.id)
                         },
+                        sharedTransitionScope = sharedTransitionScope,
+                        animatedVisibilityScope = animatedContentScope,
                         modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
                         contentPadding = PaddingValues(horizontal = 32.dp)
                     )

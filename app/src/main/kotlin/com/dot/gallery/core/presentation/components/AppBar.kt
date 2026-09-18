@@ -7,8 +7,19 @@ package com.dot.gallery.core.presentation.components
 
 import android.app.Activity
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.DeferredAnimatedVisibility
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.ExperimentalDeferredTransitionApi
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.rememberTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
@@ -16,7 +27,6 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -45,6 +55,8 @@ import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSiz
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -72,6 +84,9 @@ import com.dot.gallery.core.ScrollToTopController
 import com.dot.gallery.core.Settings.Misc.rememberAllowBlur
 import com.dot.gallery.core.Settings.Misc.rememberAutoHideNavBar
 import com.dot.gallery.core.Settings.Misc.rememberOldNavbar
+import com.dot.gallery.feature_node.presentation.mediaview.LocalViewerDismissBridge
+import com.dot.gallery.feature_node.presentation.mediaview.ViewerDismissBridge
+import com.dot.gallery.feature_node.presentation.mediaview.components.media.ViewerDismissFlightLayer
 import com.dot.gallery.feature_node.presentation.util.LocalHazeState
 import com.dot.gallery.feature_node.presentation.util.hazeEffectScaled
 import com.dot.gallery.feature_node.presentation.util.NavigationItem
@@ -115,7 +130,11 @@ fun rememberNavigationItems(): List<NavigationItem> {
 
 const val AppBarOverlayContentTag = "AppBarContainer.Overlay"
 
-@OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
+@OptIn(
+    ExperimentalMaterial3WindowSizeClassApi::class,
+    ExperimentalSharedTransitionApi::class,
+    ExperimentalDeferredTransitionApi::class,
+)
 @Stable
 @Composable
 fun AppBarContainer(
@@ -124,8 +143,8 @@ fun AppBarContainer(
     paddingValues: PaddingValues,
     isScrolling: Boolean,
     overlayVisible: Boolean = false,
-    overlayContent: @Composable BoxScope.() -> Unit = {},
-    content: @Composable () -> Unit,
+    overlayContent: @Composable (SharedTransitionScope, AnimatedVisibilityScope, ViewerDismissBridge) -> Unit = { _, _, _ -> },
+    content: @Composable (SharedTransitionScope) -> Unit,
 ) {
     val context = LocalContext.current
     val layoutDirection = LocalLayoutDirection.current
@@ -160,23 +179,52 @@ fun AppBarContainer(
         targetValue = if (showNavRail) ComponentSize.NavigationRailWidth else 0.dp,
         label = "animatedPadding"
     )
-    val overlayIsolationModifier = if (overlayVisible) {
+    // Deferred transition for the media overlay. Swipe-dismiss does not use the transition's
+    // MutableTransform — the viewer applies its drag offset to an inner card so the gesture
+    // handler's coordinate space never moves; committing runs a root-level return flight
+    // while this container's plain fade-out runs underneath.
+    val overlayDismissBridge = remember { ViewerDismissBridge() }
+    val overlayVisibilityState = overlayDismissBridge.transitionState
+    // animateTo (not a bare targetState write — its setter is internal) resolves any still-armed
+    // deferred gesture into the matching transition. Guarded so a recomposition during an armed
+    // drag (targetState still true behind the pending false) doesn't cancel the defer.
+    if (overlayVisibilityState.targetState != overlayVisible) {
+        overlayVisibilityState.animateTo(overlayVisible)
+    }
+    val overlayTransition = rememberTransition(overlayVisibilityState)
+    val overlayActive =
+        overlayVisibilityState.currentState || overlayVisibilityState.targetState
+    val overlayIsolationModifier = if (overlayActive) {
         Modifier.clearAndSetSemantics { }
     } else {
         Modifier
     }
 
+    // Safety net: if the overlay disappears while a drag still holds the defer armed (e.g. a
+    // back press mid-gesture), release the source cell's shared-element suppression.
+    if (!overlayActive) {
+        overlayDismissBridge.suppressedElementKey = null
+    }
+    // An enter flight only makes sense while the overlay is still opening — a mid-flight
+    // dismiss drops the morph rather than letting it finish over the exiting container.
+    if (!overlayVisible) {
+        overlayDismissBridge.flight?.takeIf { it.isEnter }?.let {
+            overlayDismissBridge.flight = null
+        }
+    }
     // Render the content exactly once. Toggling "use material navigation" must only swap the
     // navigation bars below, not the whole app content. Previously content() was nested inside
     // both the useOldNavbar and !useOldNavbar AnimatedVisibility blocks, so flipping the setting
     // cross-faded (and recomposed) the entire screen, making it blink (#973).
-    Box(modifier = Modifier.fillMaxSize()) {
-        Box(
+    SharedTransitionLayout {
+        CompositionLocalProvider(LocalViewerDismissBridge provides overlayDismissBridge) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Box(
             modifier = Modifier
                 .padding(start = animatedPadding)
                 .then(overlayIsolationModifier)
         ) {
-            content()
+            content(this@SharedTransitionLayout)
         }
         // Adaptive rail (wide) or the selected compact bottom-bar style.
         AnimatedVisibility(
@@ -226,12 +274,24 @@ fun AppBarContainer(
                 )
             }
         )
-        if (overlayVisible) {
-            Box(Modifier.fillMaxSize().testTag(AppBarOverlayContentTag)) {
-                overlayContent()
-            }
-        } else {
-            overlayContent()
+        overlayTransition.DeferredAnimatedVisibility(
+            visible = { it },
+            modifier = Modifier.fillMaxSize().testTag(AppBarOverlayContentTag),
+            // Long enough for the sharedBounds return flight to finish before the overlay layer
+            // is torn down.
+            enter = fadeIn(tween(320)),
+            exit = fadeOut(tween(320)),
+        ) {
+            overlayContent(this@SharedTransitionLayout, this, overlayDismissBridge)
+        }
+        // Committed swipe-dismiss flight: a root-level layer morphs the media thumbnail from the
+        // gesture's release bounds to the live source-cell bounds while the overlay exits. It
+        // lives outside the DeferredAnimatedVisibility so the container's own fade/slide can't
+        // affect it — the dismiss bookkeeping is owned by ViewerDismissState, not the shared
+        // element machinery (whose deferred handoff can't track a fullscreen element against a
+        // translating mosaic cell).
+        ViewerDismissFlightLayer(overlayDismissBridge)
+        }
         }
     }
 }

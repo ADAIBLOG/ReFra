@@ -6,13 +6,42 @@
 package com.dot.gallery.feature_node.presentation.mediaview.components.media
 
 import android.os.Build
-import androidx.compose.animation.animateContentSize
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.ScreenRotationAlt
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -26,22 +55,27 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.isSpecified
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -49,6 +83,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.dot.gallery.R
 import com.dot.gallery.cloud.core.CloudTrace
 import com.dot.gallery.cloud.core.CloudUri
 import com.dot.gallery.cloud.image.CloudImageSource
@@ -62,16 +97,17 @@ import com.dot.gallery.core.decoder.FullImageRegionDecoder
 import com.dot.gallery.core.decoder.HeifDebug
 import com.dot.gallery.core.decoder.HeifRegionDecoder
 import com.dot.gallery.core.decoder.JxlRegionDecoder
-import com.dot.gallery.core.decoder.isAnimatedWebp
-import com.dot.gallery.core.decoder.format.ImageFormatSniffer
-import com.dot.gallery.core.decoder.format.TiffImageDecoder
 import com.dot.gallery.core.decoder.NativeRawDecoder
 import com.dot.gallery.core.decoder.RawDevelopStore
 import com.dot.gallery.core.decoder.RawRegionDecoder
-import com.dot.gallery.core.util.HdrCapabilities
+import com.dot.gallery.core.decoder.format.ImageFormatSniffer
+import com.dot.gallery.core.decoder.format.TiffImageDecoder
+import com.dot.gallery.core.decoder.isAnimatedWebp
+import com.dot.gallery.core.ml.CutoutHelper
 import com.dot.gallery.core.presentation.components.util.LocalBatteryStatus
 import com.dot.gallery.core.presentation.components.util.ProvideBatteryStatus
 import com.dot.gallery.core.presentation.components.util.swipe
+import com.dot.gallery.core.util.HdrCapabilities
 import com.dot.gallery.feature_node.data.data_source.KeychainHolder
 import com.dot.gallery.feature_node.domain.model.Media
 import com.dot.gallery.feature_node.domain.util.asSubsamplingImage
@@ -111,52 +147,15 @@ import com.github.panpf.zoomimage.util.IntSizeCompat
 import com.github.panpf.zoomimage.util.isNotEmpty
 import com.github.panpf.zoomimage.zoom.ContentScaleCompat
 import com.github.panpf.zoomimage.zoom.ScalesCalculator
-import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.roundToInt
-import android.widget.Toast
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.ScreenRotationAlt
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.res.stringResource
-import com.dot.gallery.R
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.activity.compose.BackHandler
-import androidx.compose.runtime.DisposableEffect
-import com.dot.gallery.core.ml.CutoutHelper
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.LinearEasing
+import kotlin.time.Duration.Companion.milliseconds
 
 // Extended max zoom: allow zooming in until each source pixel is shown at this many screen pixels,
 // i.e. up to 5000% of the image's native (1:1) resolution. Double-tap zoom is unaffected — it still
@@ -224,6 +223,9 @@ private class ExtendedZoomScalesCalculator(
 fun <T : Media> BlurredMediaBackground(
     media: T,
     uiEnabled: Boolean,
+    // Gesture-driven fade for the dismiss drag — applied instantly (no tween) so the
+    // backdrop dissolves as the card drops. Multiplies the internal animated alpha.
+    gestureAlpha: Float = 1f,
 ) {
     ProvideBatteryStatus {
         val allowBlur = LocalMediaViewerVisualPolicy.current.allowBlur
@@ -254,7 +256,9 @@ fun <T : Media> BlurredMediaBackground(
                 },
                 modifier = Modifier
                     .fillMaxSize()
-                    .alpha(blurAlpha)
+                    .graphicsLayer {
+                        alpha = blurAlpha * gestureAlpha
+                    }
                     .blur(100.dp),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
@@ -273,6 +277,7 @@ fun <T : Media> ZoomablePagerImage(
     onItemClick: (Offset) -> Unit,
     onImmediateTap: (Offset) -> Boolean = { false },
     onSwipeDown: () -> Unit,
+    swipeToDismissEnabled: Boolean = true,
     onSubsamplingLoadingChange: (Boolean) -> Unit = {},
     onZoomTransformChange: (Transform) -> Unit = {},
     onLoadFailed: () -> Unit = {},
@@ -498,8 +503,8 @@ fun <T : Media> ZoomablePagerImage(
     LaunchedEffect(pendingRotatedReload) {
         if (!pendingRotatedReload) return@LaunchedEffect
         // Let the request key change propagate (Loading) before watching for the new Success.
-        delay(50)
-        withTimeoutOrNull(8000) {
+        delay(50.milliseconds)
+        withTimeoutOrNull(8000.milliseconds) {
             snapshotFlow { fullImageState.painterState }.first { it is PainterState.Success }
         }
         zoomState.zoomable.rotate(0)
@@ -672,7 +677,11 @@ fun <T : Media> ZoomablePagerImage(
                 }
             }
         }
-        .swipe(onSwipeDown = onSwipeDown, onOffset = { swipeOffsetY = it.y })
+        .swipe(
+            enabled = swipeToDismissEnabled,
+            onSwipeDown = onSwipeDown,
+            onOffset = { swipeOffsetY = it.y },
+        )
         .graphicsLayer {
             rotationZ = if (isRotating) rotationAnimation else 0f
         }

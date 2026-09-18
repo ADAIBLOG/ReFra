@@ -6,8 +6,15 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.DeferredAnimatedVisibility
 import androidx.compose.animation.ExperimentalSharedTransitionApi
+
 import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.core.ExperimentalDeferredTransitionApi
+import androidx.compose.animation.core.rememberTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -21,6 +28,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -30,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -53,6 +62,9 @@ import com.dot.gallery.core.presentation.components.util.OnLifecycleEvent
 import com.dot.gallery.feature_node.domain.model.UIEvent
 import com.dot.gallery.feature_node.domain.model.Vault
 import com.dot.gallery.feature_node.presentation.mediaview.MediaViewScreenRoute
+import com.dot.gallery.feature_node.presentation.mediaview.LocalViewerDismissBridge
+import com.dot.gallery.feature_node.presentation.mediaview.ViewerDismissBridge
+import com.dot.gallery.feature_node.presentation.mediaview.components.media.ViewerDismissFlightLayer
 import com.dot.gallery.feature_node.presentation.util.SecureWindow
 import com.dot.gallery.feature_node.presentation.vault.components.VaultPasswordUnlockDialog
 import com.dot.gallery.feature_node.presentation.vault.utils.GateMode
@@ -64,7 +76,7 @@ import com.dot.gallery.feature_node.presentation.vault.utils.rememberBiometricSt
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalSharedTransitionApi::class)
+@OptIn(ExperimentalSharedTransitionApi::class, ExperimentalDeferredTransitionApi::class)
 @Composable
 fun VaultScreen(
     paddingValues: PaddingValues,
@@ -116,6 +128,43 @@ fun VaultScreen(
         var gateAuthRequest by remember { mutableStateOf(0) }
         var reauthenticateOnStart by remember { mutableStateOf(false) }
         var isInitialSetupFlow by remember { mutableStateOf(false) }
+        var vaultViewerMediaId by remember { mutableStateOf<Long?>(null) }
+        var retainedVaultViewerMediaId by remember { mutableStateOf<Long?>(null) }
+        var vaultViewerOpenCount by remember { mutableIntStateOf(0) }
+        // Deferred transition for the vault media overlay. Swipe-dismiss does not use the
+        // transition's MutableTransform — the viewer applies its drag offset to an inner card
+        // so the gesture handler's coordinate space never moves; committing runs a root-level
+        // return flight while this container's plain fade-out runs underneath.
+        val vaultViewerDismissBridge = remember { ViewerDismissBridge() }
+        val vaultViewerVisibility = vaultViewerDismissBridge.transitionState
+        // animateTo (not a bare targetState write — its setter is internal) resolves any
+        // still-armed deferred gesture into the matching transition. Guarded so a recomposition
+        // during an armed drag (targetState still true behind the pending false) doesn't cancel
+        // the defer.
+        if (vaultViewerVisibility.targetState != (vaultViewerMediaId != null)) {
+            vaultViewerVisibility.animateTo(vaultViewerMediaId != null)
+        }
+        val vaultViewerTransition = rememberTransition(vaultViewerVisibility)
+        val vaultViewerActive = vaultViewerVisibility.currentState || vaultViewerVisibility.targetState
+        // Safety net: if the overlay disappears while a drag still holds the defer armed, release
+        // the source cell's shared-element suppression.
+        if (!vaultViewerActive) {
+            vaultViewerDismissBridge.suppressedElementKey = null
+        }
+        // An enter flight only makes sense while the overlay is still opening — a mid-flight
+        // dismiss drops the morph rather than letting it finish over the exiting container.
+        if (vaultViewerMediaId == null) {
+            vaultViewerDismissBridge.flight?.takeIf { it.isEnter }?.let {
+                vaultViewerDismissBridge.flight = null
+            }
+        }
+        LaunchedEffect(vaultViewerMediaId, isAuthenticated, isGateAuthenticated) {
+            if (!isAuthenticated || !isGateAuthenticated) {
+                vaultViewerMediaId = null
+            } else if (vaultViewerMediaId != null) {
+                retainedVaultViewerMediaId = vaultViewerMediaId
+            }
+        }
 
         // Per-vault auth state
         var showPasswordDialog by remember { mutableStateOf(false) }
@@ -312,8 +361,15 @@ fun VaultScreen(
         }
 
         SharedTransitionLayout {
+            CompositionLocalProvider(LocalViewerDismissBridge provides vaultViewerDismissBridge) {
+            Box(modifier = Modifier.fillMaxSize()) {
             NavHost(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(
+                        if (vaultViewerActive) Modifier.clearAndSetSemantics { }
+                        else Modifier
+                    ),
                 navController = navController,
                 startDestination = VaultScreens.LoadingScreen,
                 enterTransition = { navigateInAnimation },
@@ -530,7 +586,9 @@ fun VaultScreen(
                             pendingDeletions = viewModel.pendingDeletions,
                             userMessage = viewModel.userMessage,
                             onMediaClick = { mediaId ->
-                                navController.navigate(VaultScreens.EncryptedMediaViewScreen(mediaId))
+                                retainedVaultViewerMediaId = mediaId
+                                vaultViewerMediaId = mediaId
+                                vaultViewerOpenCount++
                             },
                         )
                     }
@@ -568,6 +626,45 @@ fun VaultScreen(
                         }
                     }
                 }
+            }
+            vaultViewerTransition.DeferredAnimatedVisibility(
+                visible = { it },
+                modifier = Modifier.fillMaxSize(),
+                // Long enough for the sharedBounds return flight to finish before the overlay
+                // layer is torn down.
+                enter = fadeIn(tween(320)),
+                exit = fadeOut(tween(320)),
+            ) {
+                val mediaId = retainedVaultViewerMediaId
+                val currentVaultValue by viewModel.currentVault.collectAsStateWithLifecycle()
+                if (mediaId != null && currentVaultValue != null) {
+                    val mediaState = remember(currentVaultValue) {
+                        viewModel.createMediaState(currentVaultValue)
+                    }.collectAsStateWithLifecycle()
+                    MediaViewScreenRoute(
+                        toggleRotate = toggleRotate,
+                        paddingValues = paddingValues,
+                        mediaId = mediaId,
+                        mediaState = mediaState,
+                        vaultState = vaultState,
+                        albumsState = albumState,
+                        metadataState = metadataState,
+                        currentVault = currentVaultValue,
+                        restoreMedia = viewModel::restoreMedia,
+                        deleteMedia = viewModel::deleteMedia,
+                        allowBlur = allowBlur,
+                        sharedTransitionScope = this@SharedTransitionLayout,
+                        animatedContentScope = this,
+                        onDismissRequest = { vaultViewerMediaId = null },
+                        viewerSessionKey = vaultViewerOpenCount,
+                        dismissBridge = vaultViewerDismissBridge,
+                    )
+                }
+            }
+            // Committed swipe-dismiss flight morphs the media thumbnail from the release bounds
+            // to the vault grid cell — outside the DeferredAV so its fade can't affect it.
+            ViewerDismissFlightLayer(vaultViewerDismissBridge)
+            }
             }
         }
 

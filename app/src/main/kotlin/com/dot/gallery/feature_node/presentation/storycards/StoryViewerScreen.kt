@@ -5,11 +5,12 @@
 
 package com.dot.gallery.feature_node.presentation.storycards
 
+import android.annotation.SuppressLint
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
+import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -27,7 +28,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -44,7 +44,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -56,18 +55,22 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
@@ -82,6 +85,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.dot.gallery.R
 import com.dot.gallery.core.LocalEventHandler
 import com.dot.gallery.core.Settings.Misc.rememberAllowBlur
+import com.dot.gallery.core.Settings.Misc.rememberSharedElements
 import com.dot.gallery.core.Settings.Misc.rememberStoryViewerAutoAdvance
 import com.dot.gallery.core.Settings.Misc.rememberStoryViewerDuration
 import com.dot.gallery.core.setFollowTheme
@@ -92,32 +96,30 @@ import com.dot.gallery.feature_node.domain.util.isVideo
 import com.dot.gallery.feature_node.domain.util.readUriOnly
 import com.dot.gallery.feature_node.presentation.mediaview.LocalMediaViewerVisualPolicy
 import com.dot.gallery.feature_node.presentation.mediaview.MediaViewerVisualPolicy
+import com.dot.gallery.feature_node.presentation.mediaview.ViewerDismissBridge
+import com.dot.gallery.feature_node.presentation.mediaview.ViewerDismissState
 import com.dot.gallery.feature_node.presentation.mediaview.components.actionbuttons.FavoriteButton
 import com.dot.gallery.feature_node.presentation.mediaview.components.actionbuttons.ShareButton
+import com.dot.gallery.feature_node.presentation.mediaview.components.media.BlurredMediaBackground
 import com.dot.gallery.feature_node.presentation.mediaview.components.media.MediaPreviewComponent
+import com.dot.gallery.feature_node.presentation.mediaview.components.media.ViewerSharedElementThumbnail
 import com.dot.gallery.feature_node.presentation.mediaview.rememberedDerivedState
+import com.dot.gallery.feature_node.presentation.util.LocalHazeState
+import com.dot.gallery.feature_node.presentation.util.MediaSharedElementKey
 import com.dot.gallery.feature_node.presentation.util.rememberWindowInsetsController
+import com.dot.gallery.feature_node.presentation.util.storyCardSharedElement
 import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
 import dev.chrisbanes.haze.materials.HazeMaterials
-import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
+import kotlin.time.Duration.Companion.milliseconds
 
 private const val DEFAULT_STORY_DURATION_SECONDS = 5
 private const val MIN_STORY_DURATION_SECONDS = 3
 private const val MAX_STORY_DURATION_SECONDS = 10
-private const val STORY_DISMISS_THRESHOLD_FRACTION = 0.12f
-private const val STORY_DISMISS_FADE_DISTANCE_FRACTION = 0.35f
-
-internal fun storyDismissProgress(offsetY: Float, height: Int): Float {
-    if (height <= 0) return 0f
-    return (offsetY.coerceAtLeast(0f) / (height * STORY_DISMISS_FADE_DISTANCE_FRACTION))
-        .coerceIn(0f, 1f)
-}
-
-internal fun shouldDismissStory(offsetY: Float, height: Int): Boolean =
-    height > 0 && offsetY >= height * STORY_DISMISS_THRESHOLD_FRACTION
 
 internal fun storyDurationMillis(rawSeconds: String): Long =
     (rawSeconds.toIntOrNull() ?: DEFAULT_STORY_DURATION_SECONDS)
@@ -134,76 +136,6 @@ internal fun advanceStoryElapsed(
     (elapsedMillis + frameDeltaMillis.coerceAtLeast(0L)).coerceAtMost(durationMillis)
 }
 
-@Stable
-private class StoryDismissState {
-    private var heightPx by mutableIntStateOf(0)
-    private var dragOffsetY by mutableFloatStateOf(0f)
-    private var gestureActive by mutableStateOf(false)
-    private val animation = Animatable(0f)
-
-    val offsetY: Float
-        get() = if (gestureActive) dragOffsetY else animation.value
-
-    val progress: Float
-        get() = storyDismissProgress(offsetY, heightPx)
-
-    val chromeAlpha: Float
-        get() = 1f - progress
-
-    val isActive: Boolean
-        get() = gestureActive || offsetY > 0f
-
-    fun updateHeight(height: Int) {
-        heightPx = height
-    }
-
-    fun start(scope: CoroutineScope) {
-        dragOffsetY = animation.value
-        gestureActive = true
-        scope.launch { animation.stop() }
-    }
-
-    fun dragBy(deltaY: Float) {
-        dragOffsetY = (dragOffsetY + deltaY).coerceIn(0f, heightPx * 1.05f)
-    }
-
-    fun finish(scope: CoroutineScope, onDismiss: () -> Unit) {
-        settle(
-            scope = scope,
-            commit = shouldDismissStory(dragOffsetY, heightPx),
-            onDismiss = onDismiss,
-        )
-    }
-
-    fun cancel(scope: CoroutineScope) {
-        settle(scope = scope, commit = false, onDismiss = {})
-    }
-
-    private fun settle(
-        scope: CoroutineScope,
-        commit: Boolean,
-        onDismiss: () -> Unit,
-    ) {
-        val startOffset = dragOffsetY
-        scope.launch {
-            animation.snapTo(startOffset)
-            gestureActive = false
-            if (commit) {
-                animation.animateTo(
-                    targetValue = heightPx * 1.05f,
-                    animationSpec = tween(durationMillis = 180),
-                )
-                onDismiss()
-            } else {
-                animation.animateTo(
-                    targetValue = 0f,
-                    animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-                )
-            }
-        }
-    }
-}
-
 @OptIn(ExperimentalHazeMaterialsApi::class)
 @Composable
 fun StoryViewerScreen(
@@ -211,7 +143,11 @@ fun StoryViewerScreen(
     initialCardId: Long = -1L,
     metadataMap: Map<Long, MediaMetadata> = emptyMap(),
     onEnsureMetadata: (Media?) -> Unit = {},
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    sharedTransitionScope: SharedTransitionScope? = null,
+    animatedVisibilityScope: AnimatedVisibilityScope? = null,
+    sessionKey: Int = 0,
+    dismissBridge: ViewerDismissBridge? = null,
 ) {
     val allowBlur by rememberAllowBlur()
     CompositionLocalProvider(
@@ -223,10 +159,15 @@ fun StoryViewerScreen(
             metadataMap = metadataMap,
             onEnsureMetadata = onEnsureMetadata,
             onDismiss = onDismiss,
+            sharedTransitionScope = sharedTransitionScope,
+            animatedVisibilityScope = animatedVisibilityScope,
+            sessionKey = sessionKey,
+            dismissBridge = dismissBridge,
         )
     }
 }
 
+@SuppressLint("NoCollectCallFound")
 @OptIn(ExperimentalHazeMaterialsApi::class)
 @Composable
 private fun StoryViewerContent(
@@ -235,6 +176,10 @@ private fun StoryViewerContent(
     metadataMap: Map<Long, MediaMetadata>,
     onEnsureMetadata: (Media?) -> Unit,
     onDismiss: () -> Unit,
+    sharedTransitionScope: SharedTransitionScope?,
+    animatedVisibilityScope: AnimatedVisibilityScope?,
+    sessionKey: Int,
+    dismissBridge: ViewerDismissBridge?,
 ) {
     // Force light status bar icons (white) on dark background, restore on exit
     val windowInsetsController = rememberWindowInsetsController()
@@ -248,10 +193,12 @@ private fun StoryViewerContent(
             eventHandler.setFollowTheme(true)
         }
     }
-    BackHandler { onDismiss() }
+    val scope = rememberCoroutineScope()
+    val dismissState = remember(initialCardId, sessionKey) { ViewerDismissState(dismissBridge) }
 
     // null = still loading, show spinner
     if (cards == null) {
+        BackHandler { onDismiss() }
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -261,7 +208,10 @@ private fun StoryViewerContent(
             CircularProgressIndicator(color = Color.White)
             IconButton(
                 onClick = onDismiss,
-                modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(12.dp),
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .statusBarsPadding()
+                    .padding(12.dp),
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -275,8 +225,11 @@ private fun StoryViewerContent(
 
     // Loaded but empty — keep recovery and navigation available
     if (cards.isEmpty()) {
+        BackHandler { onDismiss() }
         Box(
-            modifier = Modifier.fillMaxSize().background(Color.Black),
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black),
             contentAlignment = Alignment.Center,
         ) {
             Text(
@@ -286,7 +239,10 @@ private fun StoryViewerContent(
             )
             IconButton(
                 onClick = onDismiss,
-                modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(12.dp),
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .statusBarsPadding()
+                    .padding(12.dp),
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -308,6 +264,19 @@ private fun StoryViewerContent(
         initialPage = targetIndex.coerceAtLeast(0),
         pageCount = { cards.size }
     )
+    // Predictive back scrubs the return flight toward the source card — the same manual morph
+    // a committed swipe-dismiss runs — while scrim/chrome fade with gesture progress. Without
+    // a mapped cell the gesture still resolves as a plain dismiss.
+    PredictiveBackHandler { events ->
+        val card = cards.getOrNull(pagerState.currentPage)
+        dismissState.onPredictiveBack(
+            events = events,
+            elementKey = card?.id?.let { MediaSharedElementKey.StoryCardKey(it) },
+            media = card?.mediaList?.firstOrNull(),
+        ) {
+            onDismiss()
+        }
+    }
 
     // When the target card appears after initial load, scroll to it
     LaunchedEffect(targetIndex) {
@@ -316,17 +285,46 @@ private fun StoryViewerContent(
         }
     }
 
-    val scope = rememberCoroutineScope()
-    val dismissState = remember(initialCardId) { StoryDismissState() }
+    // Deterministic enter flight (overlay mode): the framework's shared-element bounds morph
+    // snaps under the deferred transition — its bounds DeferredAnimation is recreated once the
+    // transition's currentState already reads the target, so it initializes at the end bounds
+    // and the media pops fullscreen instead of morphing from the card. A root-level thumbnail
+    // morphs card→fullscreen instead, with both entries suppressed so no framework morph draws
+    // on top; suppression holds until the container's enter transition settles.
+    val sharedElementsEnabled by rememberSharedElements()
+    LaunchedEffect(sessionKey) {
+        if (!sharedElementsEnabled || dismissBridge == null || animatedVisibilityScope == null) return@LaunchedEffect
+        val card = withTimeoutOrNull(800.milliseconds) {
+            snapshotFlow { cards.getOrNull(targetIndex) }.first { it != null }
+        } ?: return@LaunchedEffect
+        val enterKey = MediaSharedElementKey.StoryCardKey(card.id)
+        val cell =
+            dismissBridge.cellBounds[enterKey]?.takeUnless { it.isEmpty } ?: return@LaunchedEffect
+        val enterMedia = card.mediaList.firstOrNull() ?: return@LaunchedEffect
+        dismissState.runEnterFlight(enterKey, enterMedia, cell)
+        snapshotFlow { animatedVisibilityScope.transition.isRunning }.first { !it }
+        if (!dismissState.isActive &&
+            dismissBridge.suppressedElementKey == enterKey &&
+            dismissBridge.flight == null
+        ) {
+            dismissBridge.suppressedElementKey = null
+        }
+    }
 
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 1f - dismissState.progress))
+        modifier = Modifier.fillMaxSize()
     ) {
+        // Backdrop scrim: pinned to the screen (the drag offset lands on an inner card) and
+        // fades with gesture progress so the timeline reveals under the dropping card.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = dismissState.chromeAlpha))
+        )
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
+            userScrollEnabled = !dismissState.isActive,
             key = { index -> cards[index].id },
             beyondViewportPageCount = 0,
         ) { page ->
@@ -343,6 +341,8 @@ private fun StoryViewerContent(
                 onEnsureMetadata = onEnsureMetadata,
                 onDismiss = onDismiss,
                 dismissState = dismissState,
+                sharedTransitionScope = sharedTransitionScope,
+                animatedVisibilityScope = animatedVisibilityScope,
                 isPagerScrollInProgress = pagerState.isScrollInProgress,
                 onCardFinished = {
                     scope.launch {
@@ -359,7 +359,7 @@ private fun StoryViewerContent(
     }
 }
 
-@OptIn(ExperimentalHazeMaterialsApi::class)
+@OptIn(ExperimentalHazeMaterialsApi::class, ExperimentalSharedTransitionApi::class)
 @Composable
 private fun StoryCardViewer(
     card: StoryCard,
@@ -367,14 +367,18 @@ private fun StoryCardViewer(
     metadataMap: Map<Long, MediaMetadata> = emptyMap(),
     onEnsureMetadata: (Media?) -> Unit = {},
     onDismiss: () -> Unit,
-    dismissState: StoryDismissState,
+    dismissState: ViewerDismissState,
+    sharedTransitionScope: SharedTransitionScope?,
+    animatedVisibilityScope: AnimatedVisibilityScope?,
     isPagerScrollInProgress: Boolean,
     onCardFinished: () -> Unit
 ) {
     val mediaList = card.mediaList
     if (mediaList.isEmpty()) {
         Box(
-            modifier = Modifier.fillMaxSize().background(Color.Black),
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black),
             contentAlignment = Alignment.Center
         ) {
             Text(stringResource(R.string.story_no_media), color = Color.White)
@@ -394,7 +398,6 @@ private fun StoryCardViewer(
     var elapsedMs by remember(currentMedia.id) { mutableLongStateOf(0L) }
     var progress by remember(currentMedia.id) { mutableFloatStateOf(0f) }
     val dismissScope = rememberCoroutineScope()
-    val dismissOffsetY = dismissState.offsetY
     val chromeAlpha = dismissState.chromeAlpha
     val lifecycleOwner = LocalLifecycleOwner.current
     var isResumed by remember(lifecycleOwner) {
@@ -408,10 +411,16 @@ private fun StoryCardViewer(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     val timerBlocked = isPaused || isPressed || isPagerScrollInProgress || !isResumed ||
-        dismissState.isActive
+            dismissState.isActive
     val playWhenReady = rememberUpdatedState(isCurrentPage && !timerBlocked)
     val allowBlur = LocalMediaViewerVisualPolicy.current.allowBlur
-    val hazeState = com.dot.gallery.feature_node.presentation.util.LocalHazeState.current
+    val viewerInteractive = !dismissState.isActive
+    val chromeInteractionModifier = if (viewerInteractive) {
+        Modifier
+    } else {
+        Modifier.clearAndSetSemantics { }
+    }
+    val hazeState = LocalHazeState.current
 
     fun showPreviousMedia() {
         if (currentMediaIndex > 0) currentMediaIndex--
@@ -469,21 +478,96 @@ private fun StoryCardViewer(
     LaunchedEffect(currentMedia.id) {
         onEnsureMetadata(currentMedia)
     }
+    // Shared-element box: composed of the first transition frame so sharedBounds can morph
+    // card↔viewer bounds, wrapping the real media over the prefetched thumbnail. It is never
+    // translated itself — the drag offset lands on MediaPreviewComponent's translating content
+    // box inside, so the frozen deferred-transition bounds can't lock the media at rest while
+    // the gesture handler's coordinate space stays untransformed.
+    var sharedElementModifier = Modifier
+        .fillMaxSize()
+    if (sharedTransitionScope != null && animatedVisibilityScope != null) {
+        sharedElementModifier = with(sharedTransitionScope) {
+            sharedElementModifier.storyCardSharedElement(
+                allowAnimation = isCurrentPage,
+                cardId = card.id,
+                animatedVisibilityScope = animatedVisibilityScope,
+                permitTransformDuringDeferredTransition = true,
+            )
+        }
+    }
+    sharedElementModifier = sharedElementModifier
+        .clipToBounds()
+        .graphicsLayer {
+            // After a committed dismiss this card's in-place copy stays hidden: the root flight
+            // layer morphs it to the source card, and through the retained exit the real card
+            // is already back on screen.
+            alpha = if (dismissState.isDismissedVisualHidden(
+                    MediaSharedElementKey.StoryCardKey(card.id)
+                )
+            ) {
+                0f
+            } else 1f
+        }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .onSizeChanged { dismissState.updateHeight(it.height) }
+            .onSizeChanged { dismissState.updateSize(it) }
+            // The dismiss gesture lives on this outermost, never-transformed box: the drag
+            // offset lands on the shared-element card inside, so pointer positions here always
+            // arrive in untranslated screen space. A handler inside the offset card would see
+            // each applied offset subtracted from the next delta — halved tracking speed and
+            // a fast up/down oscillation.
+            .pointerInput(card.id) {
+                detectVerticalDragGestures(
+                    onDragStart = {
+                        dismissState.start(
+                            dismissScope,
+                            MediaSharedElementKey.StoryCardKey(card.id),
+                            currentMedia,
+                        )
+                    },
+                    onVerticalDrag = { change, dragAmount ->
+                        dismissState.dragBy(dragAmount)
+                        change.consume()
+                    },
+                    onDragEnd = {
+                        dismissState.finish(dismissScope, onDismiss)
+                    },
+                    onDragCancel = { dismissState.cancel(dismissScope) },
+                )
+            }
     ) {
+        // The low-res surrogate rides the drag offset *behind* the pinned blurred backdrop —
+        // same stacking as the media viewer: thumbnail → blur → media content. Hidden while
+        // a flight owns the visual (committed dismiss / predictive back / enter flight).
+        ViewerSharedElementThumbnail(
+            media = currentMedia,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .fillMaxSize()
+                .offset { IntOffset(0, dismissState.offsetY.roundToInt()) }
+                .graphicsLayer {
+                    alpha = if (dismissState.isDismissedVisualHidden(
+                            MediaSharedElementKey.StoryCardKey(card.id)
+                        )
+                    ) 0f else 1f
+                },
+        )
+        // Pinned blurred backdrop — stays put while the media card slides, dissolving
+        // quickly under it via the gesture alpha.
+        Box(modifier = Modifier.fillMaxSize()) {
+            BlurredMediaBackground(
+                media = currentMedia,
+                uiEnabled = true,
+                gestureAlpha = dismissState.backdropAlpha,
+            )
+        }
         // Media display using the same component as the media view screen
         // key() forces full tear-down/rebuild when media changes, ensuring
         // the VideoPlayer's SurfaceView and ExoPlayer are properly recycled
-        key(currentMedia.id) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .offset { IntOffset(0, dismissOffsetY.roundToInt()) }
-            ) {
+        Box(modifier = sharedElementModifier) {
+            key(currentMedia.id) {
                 MediaPreviewComponent(
                     media = currentMedia,
                     uiEnabled = true,
@@ -492,11 +576,12 @@ private fun StoryCardViewer(
                     onSwipeDown = {},
                     rotationDisabled = true,
                     onImageRotated = {},
-                    offset = IntOffset.Zero,
+                    offset = IntOffset(0, dismissState.offsetY.roundToInt()),
                     isPanorama = mediaMetadata?.isPanorama == true,
                     isPhotosphere = mediaMetadata?.isPhotosphere == true,
                     isMotionPhoto = mediaMetadata?.isMotionPhoto == true,
                     storyActive = true,
+                    renderBackground = false,
                     onVideoEnded = { if (autoAdvance) showNextMedia() },
                     videoController = { _, _, currentTime, duration, _, _, _ ->
                         val videoPosition = currentTime.longValue
@@ -514,39 +599,36 @@ private fun StoryCardViewer(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .semantics {
-                    stateDescription = positionDescription
-                    customActions = navigationActions
-                }
-                .pointerInput(card.id) {
-                    detectTapGestures(
-                        onTap = { offset ->
-                            when {
-                                offset.x < size.width / 3f -> showPreviousMedia()
-                                offset.x > size.width * 2f / 3f -> showNextMedia()
-                            }
-                        },
-                        onLongPress = { },
-                        onPress = {
-                            isPressed = true
-                            try {
-                                awaitRelease()
-                            } finally {
-                                isPressed = false
-                            }
+                .then(
+                    if (viewerInteractive) {
+                        Modifier.semantics {
+                            stateDescription = positionDescription
+                            customActions = navigationActions
                         }
-                    )
-                }
-                .pointerInput(card.id) {
-                    detectVerticalDragGestures(
-                        onDragStart = { dismissState.start(dismissScope) },
-                        onVerticalDrag = { change, dragAmount ->
-                            dismissState.dragBy(dragAmount)
-                            change.consume()
-                        },
-                        onDragEnd = { dismissState.finish(dismissScope, onDismiss) },
-                        onDragCancel = { dismissState.cancel(dismissScope) },
-                    )
+                    } else {
+                        Modifier.clearAndSetSemantics { }
+                    }
+                )
+                .pointerInput(card.id, viewerInteractive) {
+                    if (viewerInteractive) {
+                        detectTapGestures(
+                            onTap = { offset ->
+                                when {
+                                    offset.x < size.width / 3f -> showPreviousMedia()
+                                    offset.x > size.width * 2f / 3f -> showNextMedia()
+                                }
+                            },
+                            onLongPress = { },
+                            onPress = {
+                                isPressed = true
+                                try {
+                                    awaitRelease()
+                                } finally {
+                                    isPressed = false
+                                }
+                            }
+                        )
+                    }
                 }
         )
 
@@ -573,6 +655,7 @@ private fun StoryCardViewer(
                 .fillMaxWidth()
                 .align(Alignment.TopCenter)
                 .graphicsLayer { alpha = chromeAlpha }
+                .then(chromeInteractionModifier)
                 .statusBarsPadding()
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
@@ -634,6 +717,7 @@ private fun StoryCardViewer(
                 }
                 IconButton(
                     onClick = onDismiss,
+                    enabled = viewerInteractive,
                     modifier = Modifier
                         .padding(end = 8.dp)
                         .then(backBgModifier)
@@ -683,6 +767,7 @@ private fun StoryCardViewer(
                     }
                     IconButton(
                         onClick = { isPaused = !isPaused },
+                        enabled = viewerInteractive,
                         modifier = Modifier
                             .then(pauseBgModifier)
                     ) {
@@ -708,6 +793,7 @@ private fun StoryCardViewer(
                 .fillMaxWidth()
                 .align(Alignment.BottomCenter)
                 .graphicsLayer { alpha = chromeAlpha }
+                .then(chromeInteractionModifier)
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
@@ -742,11 +828,11 @@ private fun StoryCardViewer(
                 ) {
                     ShareButton(
                         media = currentMedia,
-                        enabled = true
+                        enabled = viewerInteractive
                     )
                     FavoriteButton(
                         media = currentMedia,
-                        enabled = true
+                        enabled = viewerInteractive
                     )
                 }
             }
@@ -763,7 +849,11 @@ private fun StoryCardViewer(
                 Modifier.background(fallbackContainerColor, RoundedCornerShape(100))
             }
             Text(
-                text = stringResource(R.string.story_counter, currentMediaIndex + 1, mediaList.size),
+                text = stringResource(
+                    R.string.story_counter,
+                    currentMediaIndex + 1,
+                    mediaList.size
+                ),
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = Color.White,

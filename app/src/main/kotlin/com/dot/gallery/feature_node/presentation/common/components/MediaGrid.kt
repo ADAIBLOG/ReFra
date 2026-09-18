@@ -62,6 +62,7 @@ import com.dot.gallery.feature_node.domain.model.MediaMetadataState
 import com.dot.gallery.feature_node.domain.model.MediaState
 import com.dot.gallery.feature_node.domain.model.isBigHeaderKey
 import com.dot.gallery.feature_node.domain.model.isHeaderKey
+import com.dot.gallery.feature_node.presentation.mediaview.LocalMediaViewerOverlayController
 import com.dot.gallery.feature_node.presentation.mediaview.rememberedDerivedState
 import com.dot.gallery.feature_node.presentation.util.mediaSharedElement
 import com.dot.gallery.feature_node.presentation.util.photoGridDragHandler
@@ -188,6 +189,7 @@ fun <T : Media> GridPinchZoomScope.MediaGrid(
             canScroll = canScroll,
             onMediaClick = onMediaClick,
             topContent = topContent,
+            leadingItemCount = if (aboveGridContent != null) 1 else 0,
             sharedTransitionScope = sharedTransitionScope,
             animatedContentScope = animatedContentScope,
             allowSharedElements = allowSharedElements,
@@ -257,6 +259,31 @@ private fun <T : Media> GridPinchZoomScope.MediaGridContentWithHeaders(
         LaunchedEffect(isScrolling) {
             if (!canAnimate) delay(500)
             canAnimate = !isScrolling
+        }
+        val mediaViewerOverlay = LocalMediaViewerOverlayController.current
+        val returnMediaId = mediaViewerOverlay?.currentMediaId ?: -1L
+        LaunchedEffect(
+            mediaViewerOverlay?.visible,
+            returnMediaId,
+            mappedData,
+            mediaState.value.mediaGroups,
+        ) {
+            if (mediaViewerOverlay?.visible == true && returnMediaId != -1L) {
+                val localIndex = mappedData.indexOfFirst { item ->
+                    item is MediaItem.MediaViewItem<T> && (
+                        item.media.id == returnMediaId ||
+                            mediaState.value.mediaGroups[item.media.id]
+                                ?.any { it.id == returnMediaId } == true
+                        )
+                }
+                val targetIndex = leadingItemCount + localIndex
+                if (localIndex >= 0 && gridState.layoutInfo.visibleItemsInfo.none {
+                        it.index == targetIndex
+                    }
+                ) {
+                    gridState.scrollToItem(targetIndex)
+                }
+            }
         }
         val selector = LocalMediaSelector.current
         val isSelectionActive by selector.isSelectionActive.collectAsStateWithLifecycle()
@@ -442,6 +469,7 @@ private fun <T : Media> GridPinchZoomScope.MediaGridContent(
     canScroll: Boolean,
     onMediaClick: @DisallowComposableCalls (media: T) -> Unit,
     topContent: LazyGridScope.() -> Unit,
+    leadingItemCount: Int,
     sharedTransitionScope: SharedTransitionScope,
     animatedContentScope: AnimatedContentScope,
     allowSharedElements: Boolean = true,
@@ -472,6 +500,29 @@ private fun <T : Media> GridPinchZoomScope.MediaGridContent(
     LaunchedEffect(isScrolling) {
         if (!canAnimate) delay(500)
         canAnimate = !isScrolling
+    }
+    val mediaViewerOverlay = LocalMediaViewerOverlayController.current
+    val returnMediaId = mediaViewerOverlay?.currentMediaId ?: -1L
+    LaunchedEffect(
+        mediaViewerOverlay?.visible,
+        returnMediaId,
+        items,
+        mediaState.value.mediaGroups,
+    ) {
+        if (mediaViewerOverlay?.visible == true && returnMediaId != -1L) {
+            val localIndex = items.indexOfFirst { media ->
+                media.id == returnMediaId ||
+                    mediaState.value.mediaGroups[media.id]
+                        ?.any { it.id == returnMediaId } == true
+            }
+            val targetIndex = leadingItemCount + localIndex
+            if (localIndex >= 0 && gridState.layoutInfo.visibleItemsInfo.none {
+                    it.index == targetIndex
+                }
+            ) {
+                gridState.scrollToItem(targetIndex)
+            }
+        }
     }
     val selector = LocalMediaSelector.current
     val selectionActive by selector.isSelectionActive.collectAsStateWithLifecycle()

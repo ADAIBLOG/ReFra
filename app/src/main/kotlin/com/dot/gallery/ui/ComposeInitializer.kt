@@ -35,9 +35,10 @@ class ComposeInitializer : Initializer<Unit> {
                             paddingValues = paddingValues,
                             bottomBarState = bottomBarState.value,
                             isScrolling = isScrolling.value
-                        ) {
+                        ) { sharedTransitionScope ->
                             NavigationComp(
                                 navController = navController,
+                                sharedTransitionScope = sharedTransitionScope,
                                 paddingValues = paddingValues,
                                 bottomBarState = bottomBarState,
                                 systemBarFollowThemeState = systemBarFollowThemeState,

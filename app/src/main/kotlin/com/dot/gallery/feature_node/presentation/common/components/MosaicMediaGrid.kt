@@ -48,6 +48,8 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -77,6 +79,7 @@ import com.dot.gallery.feature_node.domain.model.MosaicTilePattern
 import com.dot.gallery.feature_node.domain.model.isBigHeaderKey
 import com.dot.gallery.feature_node.domain.model.isHeaderKey
 import com.dot.gallery.feature_node.domain.model.mosaicPatternsForColumns
+import com.dot.gallery.feature_node.presentation.mediaview.LocalMediaViewerOverlayController
 import com.dot.gallery.feature_node.presentation.mediaview.rememberedDerivedState
 import com.dot.gallery.feature_node.presentation.util.mediaSharedElement
 import com.dot.gallery.feature_node.presentation.util.mosaicGridDragHandler
@@ -344,6 +347,32 @@ fun <T : Media> MosaicMediaGrid(
                     is MosaicDisplayItem.PairTileItem -> put(item.key, item.mediaItems.map { it.media.id })
                     is MosaicDisplayItem.SingleItem -> put(item.key, listOf(item.mediaItem.media.id))
                 }
+            }
+        }
+    }
+    val mediaViewerOverlay = LocalMediaViewerOverlayController.current
+    val returnMediaId = mediaViewerOverlay?.currentMediaId ?: -1L
+    LaunchedEffect(
+        mediaViewerOverlay?.visible,
+        returnMediaId,
+        displayItems,
+        gridKeyToMediaIds,
+        mediaState.value.mediaGroups,
+    ) {
+        if (mediaViewerOverlay?.visible == true && returnMediaId != -1L) {
+            val localIndex = displayItems.indexOfFirst { item ->
+                val mediaIds = gridKeyToMediaIds[item.key].orEmpty()
+                mediaIds.any { id ->
+                    id == returnMediaId ||
+                        mediaState.value.mediaGroups[id]?.any { it.id == returnMediaId } == true
+                }
+            }
+            val targetIndex = (if (aboveGridContent != null) 1 else 0) + localIndex
+            if (localIndex >= 0 && gridState.layoutInfo.visibleItemsInfo.none {
+                    it.index == targetIndex
+                }
+            ) {
+                gridState.scrollToItem(targetIndex)
             }
         }
     }

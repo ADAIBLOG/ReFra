@@ -48,6 +48,7 @@ fun <T : Media> MediaPreviewComponent(
     onImageTap: (Offset) -> Unit = { onItemClick() },
     onImageImmediateTap: (Offset) -> Boolean = { false },
     onSwipeDown: () -> Unit,
+    swipeToDismissEnabled: Boolean = true,
     rotationDisabled: Boolean,
     onImageRotated: (newRotation: Int) -> Unit,
     offset: IntOffset,
@@ -73,6 +74,8 @@ fun <T : Media> MediaPreviewComponent(
     // keep it off the shared-element open/close transition's critical frames — it's imperceptible
     // during the animation but a heavy per-frame RenderEffect pass.
     renderBackground: Boolean = true,
+    // Dismiss-drag fade for the blurred backdrop — tracks the gesture instantly.
+    backdropGestureAlpha: Float = 1f,
     videoController: @Composable (ExoPlayer, MutableState<Boolean>, MutableLongState, Long, Int, Float, VideoControllerState) -> Unit,
 ) {
     AnimatedVisibility(
@@ -82,11 +85,13 @@ fun <T : Media> MediaPreviewComponent(
         visible = media != null,
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            // Non-translating blurred background
+            // Non-translating blurred background: a sibling of the offset content box, so it
+            // stays pinned to the screen while the media rides the dismiss drag offset.
             if ((!media!!.isVideo || storyActive) && !isPanorama && !isPhotosphere && renderBackground) {
                 BlurredMediaBackground(
                     media = media,
-                    uiEnabled = uiEnabled
+                    uiEnabled = uiEnabled,
+                    gestureAlpha = backdropGestureAlpha,
                 )
             }
             // Translating content
@@ -110,10 +115,12 @@ fun <T : Media> MediaPreviewComponent(
                         videoController = videoController,
                         onItemClick = onItemClick,
                         onSwipeDown = onSwipeDown,
+                        swipeToDismissEnabled = swipeToDismissEnabled,
                         onZoomChange = onZoomChange,
                         captureBlur = uiEnabled,
                         slideshowActive = slideshowActive,
                         storyActive = storyActive,
+                        compositedOutput = storyActive || !swipeToDismissEnabled,
                         onLoadFailed = onLoadFailed,
                         onVideoEnded = onVideoEnded
                     )
@@ -132,6 +139,7 @@ fun <T : Media> MediaPreviewComponent(
                         onItemClick = onImageTap,
                         onImmediateTap = onImageImmediateTap,
                         onSwipeDown = onSwipeDown,
+                        swipeToDismissEnabled = swipeToDismissEnabled,
                         onSubsamplingLoadingChange = onSubsamplingLoadingChange,
                         onZoomTransformChange = {
                             if (isSelected) {

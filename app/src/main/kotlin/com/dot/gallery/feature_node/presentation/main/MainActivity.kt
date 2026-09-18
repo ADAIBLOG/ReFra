@@ -19,9 +19,11 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
@@ -56,8 +58,13 @@ import com.dot.gallery.core.util.LocalInitialPreferences
 import com.dot.gallery.core.util.SetupMediaProviders
 import com.dot.gallery.feature_node.domain.model.UIEvent
 import com.dot.gallery.feature_node.domain.util.EventHandler
+import com.dot.gallery.feature_node.presentation.mediaview.LocalMediaViewerOverlayController
+import com.dot.gallery.feature_node.presentation.mediaview.MediaViewerOverlayHost
+import com.dot.gallery.feature_node.presentation.mediaview.canPresentMediaViewerOverlay
+import com.dot.gallery.feature_node.presentation.mediaview.rememberMediaViewerOverlayController
 import com.dot.gallery.feature_node.presentation.storycards.StoryCardsViewModel
 import com.dot.gallery.feature_node.presentation.storycards.StoryViewerScreen
+import com.dot.gallery.feature_node.presentation.storycards.StoryViewerSnapshot
 import com.dot.gallery.feature_node.presentation.util.LocalHazeState
 import com.dot.gallery.feature_node.presentation.util.Screen
 import com.dot.gallery.feature_node.presentation.util.printWarning
@@ -156,12 +163,25 @@ class MainActivity : AppCompatActivity() {
                             blurEnabled = allowBlur
                         )
                         val navController = rememberNavController()
+                        val mediaViewerOverlayController = rememberMediaViewerOverlayController()
                         val storyCardsViewModel = hiltViewModel<StoryCardsViewModel>()
                         val storyViewerSnapshot by storyCardsViewModel.viewerSnapshot.collectAsStateWithLifecycle()
+                        val retainedStoryViewerSnapshot = remember {
+                            mutableStateOf<StoryViewerSnapshot?>(null)
+                        }
+                        var storyViewerOpenCount by remember { mutableIntStateOf(0) }
+                        LaunchedEffect(storyViewerSnapshot) {
+                            if (storyViewerSnapshot != null) {
+                                retainedStoryViewerSnapshot.value = storyViewerSnapshot
+                                mediaViewerOverlayController.clearRetained()
+                                storyViewerOpenCount++
+                            }
+                        }
                         val navBackStackEntry by navController.currentBackStackEntryAsState()
                         val isStoryViewerRoute = navBackStackEntry?.destination?.route
                             ?.contains(Screen.StoryViewerScreen.route) == true
                         val storyViewerOverlayVisible = storyViewerSnapshot != null && !isStoryViewerRoute
+                        val appOverlayVisible = storyViewerOverlayVisible || mediaViewerOverlayController.visible
                         val isScrolling = remember { mutableStateOf(false) }
                         val bottomBarState = rememberSaveable { mutableStateOf(true) }
                         val systemBarFollowThemeState = rememberSaveable { mutableStateOf(true) }
@@ -171,12 +191,21 @@ class MainActivity : AppCompatActivity() {
                         val darkTheme by remember(forcedTheme, localDarkTheme, systemDarkTheme) {
                             mutableStateOf(if (forcedTheme) localDarkTheme else systemDarkTheme)
                         }
-                        LaunchedEffect(eventHandler, navController) {
+                        LaunchedEffect(eventHandler, navController, mediaViewerOverlayController) {
                             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                                 val navigateAction: (String) -> Unit = { route ->
-                                    navController.navigate(route) {
-                                        launchSingleTop = true
-                                        restoreState = true
+                                    if (
+                                        canPresentMediaViewerOverlay(
+                                            route = route,
+                                            originRoute = navController.currentDestination?.route,
+                                        ) && mediaViewerOverlayController.open(route)
+                                    ) {
+                                        retainedStoryViewerSnapshot.value = null
+                                    } else {
+                                        navController.navigate(route) {
+                                            launchSingleTop = true
+                                            restoreState = true
+                                        }
                                     }
                                 }
                                 val toggleNavigationBarAction: (Boolean) -> Unit = { isVisible ->
@@ -226,6 +255,7 @@ class MainActivity : AppCompatActivity() {
                         CompositionLocalProvider(
                             LocalHazeState provides hazeState,
                             LocalScrollToTop provides scrollToTopController,
+                            LocalMediaViewerOverlayController provides mediaViewerOverlayController,
                             LocalHazeStyle provides HazeMaterials.regular(
                                 containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
                             )
@@ -244,10 +274,29 @@ class MainActivity : AppCompatActivity() {
                                             paddingValues = paddingValues,
                                             bottomBarState = bottomBarState.value,
                                             isScrolling = isScrolling.value,
-                                            overlayVisible = storyViewerOverlayVisible,
-                                            overlayContent = {
+                                            overlayVisible = appOverlayVisible,
+                                            overlayContent = { sharedTransitionScope, animatedVisibilityScope, dismissBridge ->
+                                                // One call site per overlay content type so the
+                                                // composition (and each viewer's ViewerDismissState)
+                                                // survives the active → retained hand-off while the
+                                                // return-to-origin animation and the exit fade run.
+                                                val mediaRoute = mediaViewerOverlayController.route
+                                                    ?: mediaViewerOverlayController.retainedRoute
                                                 val snapshot = storyViewerSnapshot
-                                                if (snapshot != null && storyViewerOverlayVisible) {
+                                                    ?: retainedStoryViewerSnapshot.value
+                                                if (mediaRoute != null && storyViewerSnapshot == null) {
+                                                    MediaViewerOverlayHost(
+                                                        route = mediaRoute,
+                                                        controller = mediaViewerOverlayController,
+                                                        navController = navController,
+                                                        paddingValues = paddingValues,
+                                                        allowBlur = allowBlur,
+                                                        toggleRotate = ::toggleOrientation,
+                                                        sharedTransitionScope = sharedTransitionScope,
+                                                        animatedVisibilityScope = animatedVisibilityScope,
+                                                        dismissBridge = dismissBridge,
+                                                    )
+                                                } else if (snapshot != null) {
                                                     val metadata by storyCardsViewModel.metadataFlow
                                                         .collectAsStateWithLifecycle()
                                                     val metadataMap = remember(metadata) {
@@ -259,12 +308,17 @@ class MainActivity : AppCompatActivity() {
                                                         metadataMap = metadataMap,
                                                         onEnsureMetadata = storyCardsViewModel::ensureMetadataAvailable,
                                                         onDismiss = storyCardsViewModel::clearViewerSnapshot,
+                                                        sharedTransitionScope = sharedTransitionScope,
+                                                        animatedVisibilityScope = animatedVisibilityScope,
+                                                        sessionKey = storyViewerOpenCount,
+                                                        dismissBridge = dismissBridge,
                                                     )
                                                 }
                                             },
-                                        ) {
+                                        ) { sharedTransitionScope ->
                                             NavigationComp(
                                                 navController = navController,
+                                                sharedTransitionScope = sharedTransitionScope,
                                                 paddingValues = paddingValues,
                                                 bottomBarState = bottomBarState,
                                                 systemBarFollowThemeState = systemBarFollowThemeState,

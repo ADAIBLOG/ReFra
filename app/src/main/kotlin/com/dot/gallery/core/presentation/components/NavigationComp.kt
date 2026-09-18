@@ -6,7 +6,7 @@
 package com.dot.gallery.core.presentation.components
 
 import androidx.compose.animation.ExperimentalSharedTransitionApi
-import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -175,6 +175,7 @@ import com.google.accompanist.permissions.rememberMultiplePermissionsState
 @Composable
 fun NavigationComp(
     navController: NavHostController,
+    sharedTransitionScope: SharedTransitionScope,
     paddingValues: PaddingValues,
     bottomBarState: MutableState<Boolean>,
     systemBarFollowThemeState: MutableState<Boolean>,
@@ -258,8 +259,7 @@ fun NavigationComp(
         navViewModel.updateGroupByYear(groupTimelineByYear)
     }
 
-    SharedTransitionLayout {
-        NavHost(
+    NavHost(
             navController = navController,
             startDestination = startDest,
             enterTransition = { navigateInAnimation },
@@ -289,7 +289,7 @@ fun NavigationComp(
                 TimelineScreen(
                     paddingValues = paddingValues,
                     isScrolling = isScrolling,
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this,
                     mediaState = timelineState(),
                     metadataState = metadataState(),
@@ -305,7 +305,7 @@ fun NavigationComp(
                     mediaState = trashedMediaState,
                     metadataState = metadataState(),
                     clearSelection = selector::clearSelection,
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -319,7 +319,7 @@ fun NavigationComp(
                     mediaState = favoritesMediaState,
                     metadataState = metadataState(),
                     clearSelection = selector::clearSelection,
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -573,7 +573,7 @@ fun NavigationComp(
                             expanded
                         )
                     },
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -613,7 +613,7 @@ fun NavigationComp(
                         navController.navigate(Screen.AlbumViewScreen.album(album.id, album.label))
                     },
                     isScrolling = isScrolling,
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -660,7 +660,7 @@ fun NavigationComp(
                         groupViewRenameInitialName = group.group.label
                         groupViewScope.launch { groupViewRenameSheetState.show() }
                     },
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -790,7 +790,7 @@ fun NavigationComp(
                     vaultState = vaultState(),
                     slideshow = slideshow,
                     allowBlur = allowBlur,
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -834,7 +834,7 @@ fun NavigationComp(
                     albumsState = albumsState(),
                     vaultState = vaultState(),
                     allowBlur = allowBlur,
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -863,7 +863,7 @@ fun NavigationComp(
                     albumsState = albumsState(),
                     vaultState = vaultState(),
                     allowBlur = allowBlur,
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -898,7 +898,7 @@ fun NavigationComp(
                     paddingValues = paddingValues,
                     isScrolling = isScrolling,
                     metadataState = metadataState(),
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -920,7 +920,7 @@ fun NavigationComp(
                 LibraryScreen(
                     paddingValues = paddingValues,
                     isScrolling = isScrolling,
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -940,7 +940,7 @@ fun NavigationComp(
                     categoriesWithCount = categoriesWithCount,
                     distinctMediaCount = distinctMediaCount,
                     mediaState = categoryMediaState,
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -981,7 +981,7 @@ fun NavigationComp(
                     paddingValues = paddingValues,
                     isScrolling = isScrolling,
                     metadataState = metadataState(),
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this,
                     onNavigateBack = { navController.navigateUp() }
                 )
@@ -1004,7 +1004,7 @@ fun NavigationComp(
                     paddingValues = paddingValues,
                     isScrolling = isScrolling,
                     metadataState = metadataState(),
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this,
                     onNavigateBack = { navController.navigateUp() }
                 )
@@ -1019,7 +1019,7 @@ fun NavigationComp(
                     paddingValues = paddingValues,
                     isScrolling = isScrolling,
                     metadataState = metadataState(),
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this,
                     onNavigateBack = { navController.navigateUp() }
                 )
@@ -1043,7 +1043,7 @@ fun NavigationComp(
                     paddingValues = paddingValues,
                     isScrolling = isScrolling,
                     metadataState = metadataState(),
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this,
                     onNavigateBack = { navController.navigateUp() }
                 )
@@ -1064,7 +1064,7 @@ fun NavigationComp(
                 CategoryViewScreen(
                     category = category,
                     metadataState = metadataState(),
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -1085,7 +1085,7 @@ fun NavigationComp(
                 CategoryViewScreen(
                     categoryId = categoryId,
                     metadataState = metadataState(),
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -1126,7 +1126,7 @@ fun NavigationComp(
                     albumsState = albumsState(),
                     vaultState = vaultState(),
                     allowBlur = allowBlur,
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -1167,7 +1167,7 @@ fun NavigationComp(
                     albumsState = albumsState(),
                     vaultState = vaultState(),
                     allowBlur = allowBlur,
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -1201,7 +1201,7 @@ fun NavigationComp(
                             Screen.CollectionAlbumSelectorScreen.collectionId(collectionId)
                         )
                     },
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -1242,7 +1242,7 @@ fun NavigationComp(
                     albumsState = albumsState(),
                     vaultState = vaultState(),
                     allowBlur = allowBlur,
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -1394,7 +1394,7 @@ fun NavigationComp(
                     mediaState = archiveMediaState,
                     metadataState = metadataState(),
                     clearSelection = selector::clearSelection,
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -1510,7 +1510,7 @@ fun NavigationComp(
             ) {
                 PersonDetailScreen(
                     metadataState = metadataState(),
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this,
                 )
             }
@@ -1553,7 +1553,7 @@ fun NavigationComp(
                     albumsState = albumsState(),
                     vaultState = vaultState(),
                     allowBlur = allowBlur,
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -1630,7 +1630,7 @@ fun NavigationComp(
                 SearchScreen(
                     viewModel = searchViewModel(),
                     isScrolling = isScrolling,
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -1707,7 +1707,7 @@ fun NavigationComp(
                     metadataState = metadataState(),
                     paddingValues = paddingValues,
                     isScrolling = isScrolling,
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -1781,7 +1781,7 @@ fun NavigationComp(
                     vaultState = vaultState(),
                     target = "location_${gpsLocationNameCity}_${gpsLocationNameCountry}_${latitude}_$longitude",
                     allowBlur = allowBlur,
-                    sharedTransitionScope = this@SharedTransitionLayout,
+                    sharedTransitionScope = sharedTransitionScope,
                     animatedContentScope = this
                 )
             }
@@ -1827,7 +1827,6 @@ fun NavigationComp(
                 )
             }
 
-        }
     }
 }
 
