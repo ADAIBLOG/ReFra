@@ -46,6 +46,21 @@ data class IgnoredAlbum(
             shouldRemove = hiddenInAlbums
         )
 
+    /**
+     * Same matching as [matchesMedia]/[matchesAlbum] but gated on [hiddenInTimeline], used to
+     * resolve which cloud albums a blacklist entry hides from the unified timeline. Cloud
+     * media carries a constant shared albumID, so the timeline filter cannot go through
+     * [matchesMedia]; it resolves the matching cloud albums and removes their members.
+     */
+    internal fun matchesForTimeline(id: Long, path: String, relativePath: String, volume: String): Boolean =
+        matches(
+            id = id,
+            path = path,
+            relativePath = relativePath,
+            volume = volume,
+            shouldRemove = hiddenInTimeline
+        )
+
     private fun matches(
         id: Long,
         path: String,
