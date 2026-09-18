@@ -3,6 +3,8 @@ package com.dot.gallery.feature_node.presentation.storycards
 import com.dot.gallery.feature_node.domain.model.StoryCard
 import com.dot.gallery.feature_node.domain.model.StoryCardType
 import com.dot.gallery.feature_node.domain.model.StoryCardsConfig
+import com.dot.gallery.feature_node.presentation.mediaview.shouldCommitViewerDismiss
+import com.dot.gallery.feature_node.presentation.mediaview.viewerDismissProgress
 import java.time.MonthDay
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -85,12 +87,12 @@ class StoryCardsPolicyTest {
 
     @Test
     fun dismissProgress_clampsAndUsesTheSameThresholdAsTheGesture() {
-        assertEquals(0f, storyDismissProgress(-20f, height = 1_000), 0f)
-        assertEquals(0.5f, storyDismissProgress(175f, height = 1_000), 0.001f)
-        assertEquals(1f, storyDismissProgress(500f, height = 1_000), 0f)
-        assertEquals(0f, storyDismissProgress(200f, height = 0), 0f)
-        assertFalse(shouldDismissStory(119f, height = 1_000))
-        assertTrue(shouldDismissStory(120f, height = 1_000))
+        assertEquals(0f, viewerDismissProgress(-20f, height = 1_000), 0f)
+        assertEquals(0.5f, viewerDismissProgress(175f, height = 1_000), 0.001f)
+        assertEquals(1f, viewerDismissProgress(500f, height = 1_000), 0f)
+        assertEquals(0f, viewerDismissProgress(200f, height = 0), 0f)
+        assertFalse(shouldCommitViewerDismiss(119f, height = 1_000))
+        assertTrue(shouldCommitViewerDismiss(120f, height = 1_000))
     }
 
     @Test
