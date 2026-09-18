@@ -58,7 +58,10 @@ data class CloudServerConfigEntity(
     @ColumnInfo(defaultValue = "0") val readOnlyMode: Boolean = false,
     // Download settings (remote -> local)
     @ColumnInfo(defaultValue = "0") val downloadRemoteEnabled: Boolean = false,
-    @ColumnInfo(defaultValue = "1") val downloadVideos: Boolean = true
+    @ColumnInfo(defaultValue = "1") val downloadVideos: Boolean = true,
+    // Upload destination (local -> remote). Blank = provider default folder.
+    @ColumnInfo(defaultValue = "") val uploadBasePath: String = "",
+    @ColumnInfo(defaultValue = "") val uploadVideosPath: String = ""
 ) {
     fun toCloudServerConfig(): CloudServerConfig = CloudServerConfig(
         id = id,
@@ -94,7 +97,9 @@ data class CloudServerConfigEntity(
         preferRemoteImages = preferRemoteImages,
         readOnlyMode = readOnlyMode,
         downloadRemoteEnabled = downloadRemoteEnabled,
-        downloadVideos = downloadVideos
+        downloadVideos = downloadVideos,
+        uploadBasePath = uploadBasePath,
+        uploadVideosPath = uploadVideosPath
     )
 
     companion object {
@@ -133,7 +138,9 @@ data class CloudServerConfigEntity(
                 preferRemoteImages = config.preferRemoteImages,
                 readOnlyMode = config.readOnlyMode,
                 downloadRemoteEnabled = config.downloadRemoteEnabled,
-                downloadVideos = config.downloadVideos
+                downloadVideos = config.downloadVideos,
+                uploadBasePath = config.uploadBasePath,
+                uploadVideosPath = config.uploadVideosPath
             )
     }
 }

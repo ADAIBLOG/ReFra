@@ -13,7 +13,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dot.gallery.R
 import com.dot.gallery.cloud.core.ProviderRegistry
+import com.dot.gallery.cloud.core.UploadTargetResolver
 import com.dot.gallery.cloud.core.capabilities.SyncCapableProvider
+import com.dot.gallery.cloud.data.dao.CloudServerConfigDao
 import com.dot.gallery.cloud.data.dao.CloudUploadPrefDao
 import com.dot.gallery.core.Resource
 import com.dot.gallery.core.activeDataStore
@@ -73,7 +75,8 @@ class FreeUpSpaceViewModel @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val repository: MediaRepository,
     private val registry: ProviderRegistry,
-    private val uploadPrefDao: CloudUploadPrefDao
+    private val uploadPrefDao: CloudUploadPrefDao,
+    private val configDao: CloudServerConfigDao
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(FreeUpSpaceUiState())
@@ -184,6 +187,7 @@ class FreeUpSpaceViewModel @Inject constructor(
                             else items
                         }
                     val preferencesByAlbum = uploadPrefDao.getEnabledList().groupBy { it.albumId }
+                    val configsById = configDao.getAll().first().associateBy { it.id }
                     val hashCache = mutableMapOf<Long, String?>()
                     val verifiedHashes = mutableMapOf<Long, String>()
                     val verified = candidates.filterIndexed { index, media ->
@@ -196,7 +200,11 @@ class FreeUpSpaceViewModel @Inject constructor(
                                     verifyRemoteContent(
                                         provider,
                                         media,
-                                        preference.albumLabel.trim().ifBlank { null },
+                                        UploadTargetResolver.resolve(
+                                            configsById[preference.serverConfigId],
+                                            preference,
+                                            media
+                                        ),
                                         checksum
                                     )
                                 }
@@ -255,6 +263,7 @@ class FreeUpSpaceViewModel @Inject constructor(
                 val currentById = loadCompleteMedia()?.associateBy { media -> media.id }
                     ?: return@withContext null
                 val preferencesByAlbum = uploadPrefDao.getEnabledList().groupBy { it.albumId }
+                val configsById = configDao.getAll().first().associateBy { it.id }
                 val cutoffMs = System.currentTimeMillis() -
                         (state.cutoffDays.toLong() * 86_400_000L)
                 candidates.mapNotNull { candidate ->
@@ -275,7 +284,11 @@ class FreeUpSpaceViewModel @Inject constructor(
                             verifyRemoteContent(
                                 provider,
                                 media,
-                                preference.albumLabel.trim().ifBlank { null },
+                                UploadTargetResolver.resolve(
+                                    configsById[preference.serverConfigId],
+                                    preference,
+                                    media
+                                ),
                                 checksum
                             )
                         }

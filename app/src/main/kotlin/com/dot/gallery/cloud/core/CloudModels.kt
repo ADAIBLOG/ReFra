@@ -113,7 +113,10 @@ data class CloudServerConfig(
     val readOnlyMode: Boolean = false,
     // Download settings (remote -> local)
     val downloadRemoteEnabled: Boolean = false,
-    val downloadVideos: Boolean = true
+    val downloadVideos: Boolean = true,
+    // Upload destination (local -> remote). Blank = provider default folder.
+    val uploadBasePath: String = "",
+    val uploadVideosPath: String = ""
 )
 
 @Serializable

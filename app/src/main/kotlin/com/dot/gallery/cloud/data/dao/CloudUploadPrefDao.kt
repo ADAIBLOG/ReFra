@@ -35,6 +35,9 @@ interface CloudUploadPrefDao {
     @Query("SELECT * FROM cloud_upload_pref WHERE serverConfigId = :configId AND uploadEnabled = 1")
     suspend fun getEnabledByConfigList(configId: Long): List<CloudUploadPrefEntity>
 
+    @Query("SELECT * FROM cloud_upload_pref WHERE serverConfigId = :configId AND albumId = :albumId")
+    suspend fun get(configId: Long, albumId: Long): CloudUploadPrefEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entity: CloudUploadPrefEntity)
 

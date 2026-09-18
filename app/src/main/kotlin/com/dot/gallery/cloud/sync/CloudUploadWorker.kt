@@ -33,6 +33,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.dot.gallery.R
 import com.dot.gallery.cloud.core.ProviderRegistry
+import com.dot.gallery.cloud.core.UploadTargetResolver
 import com.dot.gallery.cloud.core.capabilities.RemoteMediaProvider
 import com.dot.gallery.cloud.core.capabilities.SyncCapableProvider
 import com.dot.gallery.cloud.data.dao.CloudDeleteLocalPrefDao
@@ -180,12 +181,13 @@ class CloudUploadWorker @AssistedInject constructor(
                     .toSet()
 
                 for (pref in enabledPrefs) {
-                    // Path-based stores (WebDAV/ownCloud/Nextcloud/SMB/NFS) mirror each
-                    // backed-up local album into its own remote folder named after the
-                    // album, instead of flattening everything into a single "Photos" dir.
-                    // Content-addressable stores (Immich) ignore this. Blank labels fall
-                    // back to the provider's default upload folder (null).
-                    val albumTarget = pref.albumLabel.trim().ifBlank { null }
+                    // Path-based stores (WebDAV/ownCloud/Nextcloud/SMB/NFS) place each
+                    // backed-up local album under the account's configured upload folder
+                    // (or the album's own custom path), instead of flattening everything
+                    // into a single "Photos" dir. Content-addressable stores (Immich)
+                    // ignore this. A fully-blank target falls back to the provider's
+                    // default upload folder (null).
+                    fun uploadTarget(media: Media) = UploadTargetResolver.resolve(config, pref, media)
                     val allAlbumMedia = repository.getMediaByAlbumId(pref.albumId, skipBatching = true)
                         .first().data ?: continue
                     if (allAlbumMedia.isEmpty()) continue
@@ -204,7 +206,7 @@ class CloudUploadWorker @AssistedInject constructor(
                         media.id in downloadedCopyIds || isBackupRevisionCached(
                             uri = backupRevisionLocalUri(
                                 media.getUri().toString(),
-                                syncProvider.deterministicRemoteId(media, albumTarget)
+                                syncProvider.deterministicRemoteId(media, uploadTarget(media))
                             ),
                             mediaId = media.id,
                             label = media.label,
@@ -227,7 +229,7 @@ class CloudUploadWorker @AssistedInject constructor(
                                 configId = config.id,
                                 albumLabel = pref.albumLabel,
                                 checksum = checksum,
-                                targetPath = albumTarget
+                                targetPath = uploadTarget(media)
                             )
                         )
                     }
@@ -273,7 +275,7 @@ class CloudUploadWorker @AssistedInject constructor(
                                                 media,
                                                 hash,
                                                 syncProvider,
-                                                albumTarget
+                                                uploadTarget(media)
                                             )
                                         } else {
                                             queue(media, hash)
@@ -459,12 +461,9 @@ class CloudUploadWorker @AssistedInject constructor(
                 val destinations = destConfigs.mapNotNull { config ->
                     val provider = registry.getByConfigId(config.id) as? SyncCapableProvider
                         ?: return@mapNotNull null
-                    val targetPath = uploadPrefsByConfig[config.id]
+                    val pref = uploadPrefsByConfig[config.id]
                         ?.firstOrNull { it.albumId == albumId }
-                        ?.albumLabel
-                        ?.trim()
-                        ?.ifBlank { null }
-                    provider to targetPath
+                    Triple(provider, config, pref)
                 }
                 if (destinations.size != destConfigs.size) {
                     printDebug("CloudUploadWorker: delete-local skipped for album $albumId — a destination is unavailable")
@@ -474,12 +473,13 @@ class CloudUploadWorker @AssistedInject constructor(
                 val mediaWithHashes = albumMedia.mapNotNull { m -> computeSha1(m)?.let { m to it } }
                 if (mediaWithHashes.isEmpty()) continue
                 val hashes = mediaWithHashes.map { it.second }
-                val presence = destinations.map { (provider, targetPath) ->
+                val presence = destinations.map { (provider, config, pref) ->
                     try {
                         if (provider.requiresUploadChecksum) {
                             provider.bulkUploadCheck(hashes).getOrThrow()
                         } else {
                             mediaWithHashes.mapIndexed { index, (media, hash) ->
+                                val targetPath = pref?.let { UploadTargetResolver.resolve(config, it, media) }
                                 index.toString() to provider.verifyRemoteContent(media, targetPath, hash).getOrThrow()
                             }.toMap()
                         }

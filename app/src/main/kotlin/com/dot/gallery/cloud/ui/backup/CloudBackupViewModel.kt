@@ -15,6 +15,7 @@ import androidx.work.WorkManager
 import com.dot.gallery.cloud.core.ConnectionState
 import com.dot.gallery.cloud.core.ProviderRegistry
 import com.dot.gallery.cloud.core.ProviderType
+import com.dot.gallery.cloud.core.UploadTargetResolver
 import com.dot.gallery.cloud.core.capabilities.SyncCapableProvider
 import com.dot.gallery.cloud.data.dao.CloudMediaDao
 import com.dot.gallery.cloud.data.dao.CloudServerConfigDao
@@ -288,9 +289,8 @@ class CloudBackupViewModel @Inject constructor(
                         val revisionProvider = provider
                             ?: providerInitializer.createTransientProvider(cfg.providerType) as? SyncCapableProvider
                         val mediaWithTargets = prefs.flatMap { pref ->
-                            val targetPath = pref.albumLabel.trim().ifBlank { null }
                             (repository.getMediaByAlbumId(pref.albumId, skipBatching = true).first().data ?: emptyList())
-                                .map { it to targetPath }
+                                .map { it to UploadTargetResolver.resolve(cfg, pref, it) }
                         }.distinctBy { it.first.id to it.second }.filter { it.first.uri.scheme != "cloud" }
                         val media = mediaWithTargets.distinctBy { it.first.id }.map { it.first }
                         val targetPathsByMediaId = mediaWithTargets.groupBy(

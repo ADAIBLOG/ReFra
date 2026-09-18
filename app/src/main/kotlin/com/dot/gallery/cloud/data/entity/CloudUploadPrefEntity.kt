@@ -5,6 +5,7 @@
 
 package com.dot.gallery.cloud.data.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import com.dot.gallery.cloud.core.ProviderType
@@ -29,5 +30,12 @@ data class CloudUploadPrefEntity(
     val providerType: ProviderType,
     val albumLabel: String = "",
     val uploadEnabled: Boolean = false,
-    val deleteLocalAfterUpload: Boolean = false
+    val deleteLocalAfterUpload: Boolean = false,
+    /**
+     * Optional per-album remote folder override for path-based providers
+     * (WebDAV/ownCloud/Nextcloud/SMB/NFS). When non-blank it is used verbatim
+     * instead of "<account base>/<albumLabel>". Blank = derive from the album
+     * label under the account's upload base path.
+     */
+    @ColumnInfo(defaultValue = "") val customPath: String = ""
 )

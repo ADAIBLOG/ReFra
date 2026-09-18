@@ -13,6 +13,7 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.dot.gallery.cloud.core.ProviderRegistry
 import com.dot.gallery.cloud.core.ProviderType
+import com.dot.gallery.cloud.core.UploadTargetResolver
 import com.dot.gallery.cloud.core.capabilities.SyncCapableProvider
 import com.dot.gallery.cloud.data.dao.CloudMediaDao
 import com.dot.gallery.cloud.data.dao.CloudServerConfigDao
@@ -158,7 +159,7 @@ class UploadDetailsViewModel @Inject constructor(
                     ).map { backupLocalRevisionKey(it.localUri, it.localSize, it.localTimestamp) }
                         .toSet()
                     for (pref in prefs) {
-                        val targetPath = pref.albumLabel.trim().ifBlank { null }
+                        fun targetPath(item: Media) = UploadTargetResolver.resolve(cfg, pref, item)
                         val media = (repository.getMediaByAlbumId(pref.albumId, skipBatching = true).first().data ?: emptyList())
                             .filter { it.uri.scheme != "cloud" }
                         if (media.isEmpty()) continue
@@ -166,7 +167,7 @@ class UploadDetailsViewModel @Inject constructor(
                             backupLocalRevisionKey(
                                 backupRevisionLocalUri(
                                     item.getUri().toString(),
-                                    provider.deterministicRemoteId(item, targetPath)
+                                    provider.deterministicRemoteId(item, targetPath(item))
                                 ),
                                 item.size,
                                 item.timestamp
@@ -195,14 +196,14 @@ class UploadDetailsViewModel @Inject constructor(
                                     item,
                                     hash,
                                     provider,
-                                    targetPath
+                                    targetPath(item)
                                 )
                             }
                         } else {
                             unchecked.forEach { item ->
                                 val hash = hashOf(item) ?: return@forEach
                                 val verified = try {
-                                    provider.verifyRemoteContent(item, targetPath, hash).getOrDefault(false)
+                                    provider.verifyRemoteContent(item, targetPath(item), hash).getOrDefault(false)
                                 } catch (e: CancellationException) {
                                     throw e
                                 } catch (_: Exception) {
@@ -216,7 +217,7 @@ class UploadDetailsViewModel @Inject constructor(
                                         item,
                                         hash,
                                         provider,
-                                        targetPath
+                                        targetPath(item)
                                     )
                                 }
                             }

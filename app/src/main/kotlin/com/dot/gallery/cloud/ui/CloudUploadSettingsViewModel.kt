@@ -13,6 +13,8 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.dot.gallery.R
 import com.dot.gallery.cloud.core.ProviderRegistry
+import com.dot.gallery.cloud.core.ProviderType
+import com.dot.gallery.cloud.core.UploadTargetResolver
 import com.dot.gallery.cloud.core.capabilities.SyncCapableProvider
 import com.dot.gallery.cloud.data.dao.CloudDeleteLocalPrefDao
 import com.dot.gallery.cloud.data.dao.CloudServerConfigDao
@@ -80,6 +82,20 @@ class CloudUploadSettingsViewModel @Inject constructor(
     private val _localAlbums = MutableStateFlow<List<Album>>(emptyList())
     val localAlbums: StateFlow<List<Album>> = _localAlbums.asStateFlow()
 
+    /**
+     * Whether the resolved account stores uploads by path (WebDAV/ownCloud/
+     * Nextcloud/SMB/NFS). Content-addressed providers (Immich) ignore remote
+     * folders, so the custom-path affordance is hidden for them.
+     */
+    private val _supportsUploadPaths = MutableStateFlow(false)
+    val supportsUploadPaths: StateFlow<Boolean> = _supportsUploadPaths.asStateFlow()
+
+    /** Per-album remote folder overrides, keyed by albumId. Blank = account default. */
+    val customPaths: StateFlow<Map<Long, String>> = effectiveConfigId
+        .flatMapLatest { id -> uploadPrefDao.getByConfig(id) }
+        .map { prefs -> prefs.associate { it.albumId to it.customPath } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
     val uploadPreferences: StateFlow<Map<Long, Boolean>> = effectiveConfigId
         .flatMapLatest { id -> uploadPrefDao.getByConfig(id) }
         .map { prefs -> prefs.associate { it.albumId to it.uploadEnabled } }
@@ -106,6 +122,7 @@ class CloudUploadSettingsViewModel @Inject constructor(
             if (config != null) {
                 effectiveConfigId.value = config.id
                 _accountLabel.value = config.displayName.ifBlank { config.providerType.displayName }
+                _supportsUploadPaths.value = config.providerType != ProviderType.IMMICH
             }
         }
     }
@@ -123,6 +140,7 @@ class CloudUploadSettingsViewModel @Inject constructor(
     fun setAlbumUploadEnabled(albumId: Long, albumLabel: String, enabled: Boolean) {
         viewModelScope.launch {
             val config = cachedConfig ?: return@launch
+            val existing = uploadPrefDao.get(config.id, albumId)
             val deleteLocal = deleteLocalPreferences.value[albumId] ?: false
             uploadPrefDao.upsert(
                 CloudUploadPrefEntity(
@@ -131,8 +149,20 @@ class CloudUploadSettingsViewModel @Inject constructor(
                     providerType = config.providerType,
                     albumLabel = albumLabel,
                     uploadEnabled = enabled,
-                    deleteLocalAfterUpload = deleteLocal
+                    deleteLocalAfterUpload = deleteLocal,
+                    customPath = existing?.customPath.orEmpty()
                 )
+            )
+        }
+    }
+
+    /** Sets (or clears, when blank) the per-album remote folder override. */
+    fun setAlbumCustomPath(albumId: Long, customPath: String) {
+        viewModelScope.launch {
+            val config = cachedConfig ?: return@launch
+            val existing = uploadPrefDao.get(config.id, albumId) ?: return@launch
+            uploadPrefDao.upsert(
+                existing.copy(customPath = UploadTargetResolver.sanitizePath(customPath))
             )
         }
     }
@@ -240,9 +270,7 @@ class CloudUploadSettingsViewModel @Inject constructor(
                     } else {
                         mediaWithHashes.forEach { (media, hash) ->
                             val targetPath = prefsByAlbumId[media.albumID]
-                                ?.albumLabel
-                                ?.trim()
-                                ?.ifBlank { null }
+                                ?.let { UploadTargetResolver.resolve(cachedConfig, it, media) }
                             val verified = try {
                                 syncProvider.verifyRemoteContent(media, targetPath, hash).getOrThrow()
                             } catch (e: CancellationException) {

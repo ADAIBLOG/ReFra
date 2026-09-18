@@ -695,7 +695,8 @@ class CloudAccountsViewModel @Inject constructor(
                     albumId = albumId,
                     providerType = state.providerType,
                     albumLabel = label,
-                    uploadEnabled = true
+                    uploadEnabled = true,
+                    customPath = uploadPrefDao.get(configId, albumId)?.customPath.orEmpty()
                 )
             )
         }

@@ -9,6 +9,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,6 +32,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -38,6 +40,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -66,6 +69,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dot.gallery.core.Constants
 import com.dot.gallery.core.Settings.Album.rememberAlbumGridSize
 import com.dot.gallery.core.presentation.components.SetupButton
+import com.dot.gallery.feature_node.domain.model.Album
 import com.dot.gallery.feature_node.presentation.ignored.setup.components.SelectableAlbumItem
 import com.dot.gallery.feature_node.presentation.settings.components.RequestInitialSettingsFocus
 import com.dot.gallery.feature_node.presentation.settings.components.settingsFocusGroup
@@ -85,10 +89,13 @@ fun CloudUploadSettingsScreen(
     val uploadPrefs by viewModel.uploadPreferences.collectAsStateWithLifecycle()
     val deleteLocalPrefs by viewModel.deleteLocalPreferences.collectAsStateWithLifecycle()
     val accountLabel by viewModel.accountLabel.collectAsStateWithLifecycle()
+    val supportsUploadPaths by viewModel.supportsUploadPaths.collectAsStateWithLifecycle()
+    val customPaths by viewModel.customPaths.collectAsStateWithLifecycle()
 
     val uploadRunning by viewModel.uploadWorkRunning.collectAsStateWithLifecycle()
 
     var showDedupDialog by remember { mutableStateOf(false) }
+    var pathEditAlbum by remember { mutableStateOf<Album?>(null) }
     val dedupState by viewModel.dedupState.collectAsStateWithLifecycle()
 
     val enabledAlbums by remember(uploadPrefs) {
@@ -272,6 +279,41 @@ fun CloudUploadSettingsScreen(
                                 }
                             )
                         }
+
+                        // Per-album remote folder overrides (path-based providers only).
+                        if (supportsUploadPaths) {
+                            localAlbums.filter { it.id in enabledAlbums }.forEach { album ->
+                                val customPath = customPaths[album.id].orEmpty()
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable { pathEditAlbum = album }
+                                        .padding(horizontal = 4.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = album.label,
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                        Text(
+                                            text = customPath.ifBlank {
+                                                stringResource(R.string.cloud_upload_album_custom_path_default)
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Icon(
+                                        imageVector = Icons.Outlined.Folder,
+                                        contentDescription = stringResource(R.string.cloud_upload_album_custom_path),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -345,6 +387,43 @@ fun CloudUploadSettingsScreen(
                     }) {
                         Text(stringResource(android.R.string.cancel))
                     }
+                }
+            }
+        )
+    }
+
+    pathEditAlbum?.let { album ->
+        var text by remember(album.id) {
+            mutableStateOf(customPaths[album.id].orEmpty())
+        }
+        AlertDialog(
+            onDismissRequest = { pathEditAlbum = null },
+            title = { Text(album.label) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = stringResource(R.string.cloud_upload_album_custom_path_summary),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        placeholder = { Text(stringResource(R.string.cloud_backup_folder_dialog_hint)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.setAlbumCustomPath(album.id, text)
+                    pathEditAlbum = null
+                }) { Text(stringResource(R.string.action_save)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pathEditAlbum = null }) {
+                    Text(stringResource(R.string.action_cancel))
                 }
             }
         )

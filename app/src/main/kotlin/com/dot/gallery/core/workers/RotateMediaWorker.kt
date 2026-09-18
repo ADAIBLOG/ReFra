@@ -176,7 +176,14 @@ class RotateMediaWorker @AssistedInject constructor(
                     size = 0,
                     duration = null,
                 )
-                val uploadResult = target.provider.uploadAsset(tempMedia)
+                // Keep the rotated copy beside the source file: on path-based stores the
+                // remoteId IS the remote path, so its parent folder becomes the upload
+                // target instead of the provider's default folder. Content-addressed
+                // providers (Immich) have no '/' in their remoteId and ignore this.
+                val remoteParent = target.cloudUri.remoteId
+                    .takeIf { '/' in it }
+                    ?.substringBeforeLast('/')
+                val uploadResult = target.provider.uploadAsset(tempMedia, remoteParent)
                 val uploaded = uploadResult.getOrElse { error ->
                     // Keep the generated local copy when upload is not confirmed.
                     return@withContext failure("Upload failed: ${error.message}")

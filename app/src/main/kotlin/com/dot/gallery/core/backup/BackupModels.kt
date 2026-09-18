@@ -363,7 +363,9 @@ data class CloudConfigEntry(
     val preferRemoteImages: Boolean = false,
     val readOnlyMode: Boolean = false,
     val downloadRemoteEnabled: Boolean = false,
-    val downloadVideos: Boolean = true
+    val downloadVideos: Boolean = true,
+    val uploadBasePath: String = "",
+    val uploadVideosPath: String = ""
 )
 
 /** A vault and the metadata of all media it contains. Binary content is stored separately in the archive. */

@@ -1885,6 +1885,17 @@
     <string name="cloud_backup_album_sync">Album synchronization</string>
     <string name="cloud_backup_sync_albums">Sync albums to server</string>
     <string name="cloud_backup_sync_albums_summary">Create and update albums on the server matching local albums</string>
+    <string name="cloud_backup_destination">Upload destination</string>
+    <string name="cloud_backup_upload_folder">Upload folder</string>
+    <string name="cloud_backup_upload_folder_summary">Remote folder for uploads; each backed-up album becomes a subfolder. Empty uses the provider default.</string>
+    <string name="cloud_backup_upload_folder_default">Provider default (Photos)</string>
+    <string name="cloud_backup_videos_folder">Videos folder</string>
+    <string name="cloud_backup_videos_folder_summary">Optional separate remote folder for videos. Empty uses the upload folder.</string>
+    <string name="cloud_backup_videos_folder_same">Same as photos</string>
+    <string name="cloud_backup_folder_dialog_hint">Remote path, e.g. Backups/Phone</string>
+    <string name="cloud_upload_album_custom_path">Custom remote folder</string>
+    <string name="cloud_upload_album_custom_path_summary">Overrides the destination folder for this album on this account.</string>
+    <string name="cloud_upload_album_custom_path_default">Account default</string>
     <string name="cloud_sync_status">Sync Status</string>
     <string name="cloud_sync_total_cached">Total cached</string>
     <string name="cloud_sync_items_count">%1$d items</string>
