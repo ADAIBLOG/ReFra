@@ -471,6 +471,25 @@ fun SettingsSelectionActionsScreen() {
                 )
             }
 
+            // ── Fill action bar toggle ──
+            item(key = "bottom_fill") {
+                SettingsItem(
+                    item = SettingsEntity.SwitchPreference(
+                        title = stringResource(R.string.action_bar_fill),
+                        summary = stringResource(R.string.action_bar_fill_summary),
+                        isChecked = sanitizedConfig.fillActionBar,
+                        onCheck = { checked ->
+                            config = config.copy(fillActionBar = checked)
+                        },
+                        screenPosition = Position.Alone
+                    ),
+                    modifier = Modifier
+                        .widthIn(max = 600.dp)
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                )
+            }
+
             // ── Bottom Actions List ──
             itemsIndexed(
                 items = sanitizedConfig.bottomActions,
@@ -791,8 +810,13 @@ internal fun SelectionSheetPreview(
                 config.bottomActions.forEach { action ->
                     Column(
                         modifier = Modifier
+                            .then(
+                                if (config.fillActionBar) Modifier.weight(1f)
+                                else Modifier.defaultMinSize(
+                                    minWidth = if (showTitles) 80.dp else 64.dp
+                                )
+                            )
                             .defaultMinSize(
-                                minWidth = if (showTitles) 80.dp else 64.dp,
                                 minHeight = if (showTitles) 80.dp else 64.dp
                             )
                             .clip(RoundedCornerShape(12.dp))

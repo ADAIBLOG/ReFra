@@ -598,6 +598,8 @@
     <string name="top_actions">Top Actions</string>
     <string name="top_actions_right_aligned">Right-align top actions</string>
     <string name="top_actions_right_aligned_summary">Position top action buttons near the right edge of the display for easier reach</string>
+    <string name="action_bar_fill">Fill action bar</string>
+    <string name="action_bar_fill_summary">Shrink actions to fit on screen instead of scrolling</string>
     <string name="middle_actions">Middle Actions</string>
     <string name="action_bar">Action Bar</string>
     <string name="add_action">Add action</string>

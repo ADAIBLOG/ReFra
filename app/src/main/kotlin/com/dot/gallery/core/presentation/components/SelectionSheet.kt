@@ -1343,9 +1343,13 @@ fun RowScope.SelectionBarColumn(
     // The bottom bar scrolls horizontally once items overflow, so items keep a
     // minimum width instead of weighting to an equal share — when everything fits,
     // the row's SpaceEvenly arrangement spreads them across the full width.
-    val minWidthSizeModifier = remember(showTitles) {
-        if (showTitles) Modifier.defaultMinSize(minWidth = 80.dp)
-        else Modifier.defaultMinSize(minWidth = 64.dp)
+    // With "fill action bar" enabled the items weight to an equal share of the
+    // viewport instead, squeezing long labels rather than scrolling.
+    val selectionSheetConfig by rememberSelectionSheetConfig()
+    val minWidthSizeModifier = when {
+        selectionSheetConfig.fillActionBar -> Modifier.weight(1f)
+        showTitles -> Modifier.defaultMinSize(minWidth = 80.dp)
+        else -> Modifier.defaultMinSize(minWidth = 64.dp)
     }
     Column(
         modifier = Modifier
