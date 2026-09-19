@@ -1927,6 +1927,7 @@
     </plurals>
     <string name="cloud_person_remove_media_summary">The photos stay in your library — they will just no longer be counted as this person.</string>
     <string name="cloud_person_remove_media_confirm">Remove</string>
+    <string name="cloud_person_media_people_header">This photo is counted as:</string>
     <string name="cloud_profile">Cloud Profile</string>
     <string name="cloud_profile_server">Cloud Server</string>
     <string name="cloud_profile_storage">Server Storage</string>

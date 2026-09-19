@@ -45,6 +45,9 @@ interface DetectedFaceDao {
     @Query("SELECT DISTINCT mediaId FROM detected_faces WHERE personId = :personId")
     fun observeMediaIdsForPerson(personId: String): Flow<List<Long>>
 
+    @Query("SELECT DISTINCT personId FROM detected_faces WHERE mediaId = :mediaId AND personId IS NOT NULL")
+    fun observePersonIdsForMedia(mediaId: Long): Flow<List<String>>
+
     @Query("SELECT * FROM detected_faces WHERE mediaId = :mediaId")
     suspend fun getByMedia(mediaId: Long): List<DetectedFaceEntity>
 

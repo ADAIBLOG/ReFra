@@ -80,6 +80,25 @@ class LocalPeopleProvider @Inject constructor(
             Resource.Success((local + cloud).filter { it.id in idSet })
         }
 
+    /**
+     * Persons whose faces were detected in [mediaId], emitted live as assignments change —
+     * used by the media viewer's "remove from person" action to review which people a
+     * media is counted as.
+     */
+    fun getMediaPeople(mediaId: Long): Flow<List<PersonInfo>> =
+        faceDao.observePersonIdsForMedia(mediaId).map { ids ->
+            ids.mapNotNull { personDao.getById(it) }.map { p ->
+                PersonInfo(
+                    id = p.id,
+                    name = p.name,
+                    providerType = ProviderType.LOCAL_PEOPLE,
+                    serverConfigId = LOCAL_PEOPLE_CONFIG_ID,
+                    thumbnailUrl = p.thumbnailUrl,
+                    assetCount = p.faceCount
+                )
+            }
+        }
+
     override fun getPersonThumbnailUrl(personId: String): String? = null
 
     override suspend fun updatePersonName(personId: String, name: String): Result<Unit> =

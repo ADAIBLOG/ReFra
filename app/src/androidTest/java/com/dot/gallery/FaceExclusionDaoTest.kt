@@ -110,6 +110,24 @@ class FaceExclusionDaoTest {
     }
 
     @Test
+    fun observedPersonIdsForMediaTrackUnassigns() = runBlocking {
+        insertPerson("personA")
+        insertPerson("personB")
+        faceDao.insert(DetectedFaceEntity(mediaId = 7L, personId = "personA"))
+        faceDao.insert(DetectedFaceEntity(mediaId = 7L, personId = "personB"))
+        faceDao.insert(DetectedFaceEntity(mediaId = 7L)) // unassigned face — excluded
+
+        assertEquals(
+            setOf("personA", "personB"),
+            faceDao.observePersonIdsForMedia(7L).first().toSet()
+        )
+        faceDao.unassignPersonMedia("personA", listOf(7L))
+        assertEquals(listOf("personB"), faceDao.observePersonIdsForMedia(7L).first())
+        faceDao.unassignPersonMedia("personB", listOf(7L))
+        assertEquals(emptyList<String>(), faceDao.observePersonIdsForMedia(7L).first())
+    }
+
+    @Test
     fun deletingPersonCascadesExclusionsAndClusters() = runBlocking {
         insertPerson("personA")
         faceDao.insert(DetectedFaceEntity(mediaId = 7L, personId = "personA"))

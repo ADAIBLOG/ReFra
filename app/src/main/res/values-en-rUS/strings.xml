@@ -1863,6 +1863,7 @@
     </plurals>
     <string name="cloud_person_remove_media_summary">The photos stay in your library — they will just no longer be counted as this person.</string>
     <string name="cloud_person_remove_media_confirm">Remove</string>
+    <string name="cloud_person_media_people_header">This photo is counted as:</string>
     <string name="cloud_free_space_never">Never</string>
     <string name="cloud_free_space_never_summary">Automatic removal is off. Pick a time range to scan for local copies to remove.</string>
     <string name="cloud_settings_more_header">Preferences</string>

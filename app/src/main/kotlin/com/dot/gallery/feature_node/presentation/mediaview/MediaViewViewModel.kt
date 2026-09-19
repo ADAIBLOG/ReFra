@@ -19,6 +19,8 @@ import com.dot.gallery.core.metadata.MetadataRemovalMode
 import com.dot.gallery.core.metadata.MetadataSaveMode
 import com.dot.gallery.core.metadata.SanitizationCapability
 import com.dot.gallery.core.metadata.SanitizationResult
+import com.dot.gallery.cloud.core.PersonInfo
+import com.dot.gallery.cloud.local.LocalPeopleProvider
 import com.dot.gallery.core.workers.RotateMediaWorker
 import com.dot.gallery.core.workers.rotateImage
 import com.dot.gallery.feature_node.domain.model.Media
@@ -33,6 +35,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -63,7 +66,8 @@ internal fun scaledFilmstripFrameWidth(
 class MediaViewViewModel @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val workManager: WorkManager,
-    private val repository: MediaRepository
+    private val repository: MediaRepository,
+    private val localPeopleProvider: LocalPeopleProvider
 ) : ViewModel() {
 
     private val _uiEvents = MutableSharedFlow<MediaViewEvent>(extraBufferCapacity = 1)
@@ -76,6 +80,17 @@ class MediaViewViewModel @Inject constructor(
     private var rotateWorkId: UUID? = null
     // Id of the media being rotated (so the viewer can hold the visual rotation for that page only).
     private var pendingRotationMediaId: Long? = null
+
+    /** Live list of on-device persons whose faces were detected in [mediaId]. */
+    fun peopleForMedia(mediaId: Long): Flow<List<PersonInfo>> =
+        localPeopleProvider.getMediaPeople(mediaId)
+
+    /** Un-assign [mediaId] from [personId] without deleting the media. */
+    fun removeMediaFromPerson(personId: String, mediaId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            localPeopleProvider.removeMediaFromPerson(personId, listOf(mediaId))
+        }
+    }
 
     // ======================== On-demand Metadata Fetching ========================
 
