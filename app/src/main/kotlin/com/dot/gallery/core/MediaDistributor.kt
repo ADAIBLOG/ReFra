@@ -27,6 +27,22 @@ enum class AlbumMediaLoadMode(val skipBatching: Boolean) {
     Complete(true)
 }
 
+/**
+ * Which media views a pending removal applies to. The scope mirrors the mutation: a trashed
+ * item leaves the regular views but is arriving in the trash view, a restore only leaves the
+ * trash view, and a permanent delete leaves every view.
+ */
+enum class PendingRemovalScope {
+    /** Item is gone from every view (permanent delete). */
+    EVERYWHERE,
+
+    /** Item leaves regular views but is arriving in the trash view (trash op). */
+    NON_TRASH,
+
+    /** Item only leaves the trash view (restore out of trash). */
+    TRASH_ONLY
+}
+
 interface MediaDistributor {
 
     /**
@@ -70,6 +86,23 @@ interface MediaDistributor {
     ): Flow<MediaState<Media.UriMedia>>
     val favoritesMediaFlow: SharedFlow<MediaState<Media.UriMedia>>
     val trashMediaFlow: SharedFlow<MediaState<Media.UriMedia>>
+
+    /**
+     * Optimistic mutations: media ids confirmed for trash/delete/restore are hidden from the
+     * media flows until the underlying source catches up, and favorite toggles are applied
+     * over the source the same way. Both self-heal — a pending id that reappears in a source
+     * after being observed absent (e.g. a trash restore) is un-marked, overrides the source
+     * already reflects are dropped, and surviving entries expire after a short TTL.
+     */
+    val pendingRemovalIds: StateFlow<Set<Long>>
+    val favoriteOverrides: StateFlow<Map<Long, Boolean>>
+    fun markPendingRemoval(
+        ids: Collection<Long>,
+        scope: PendingRemovalScope = PendingRemovalScope.EVERYWHERE
+    )
+    fun unmarkPendingRemoval(ids: Collection<Long>)
+    fun setFavoriteOverride(mediaId: Long, favorite: Boolean)
+    fun clearFavoriteOverride(mediaId: Long)
 
     /**
      * Cloud Sync States (media id → SyncState)

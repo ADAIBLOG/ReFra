@@ -356,3 +356,95 @@ private fun List<Media>.dateHeader(
         val endDate: DateExt = first().timestampFor(dateSource).getDateExt()
         getDateHeader(startDate, endDate)
     } else ""
+
+/**
+ * Applies optimistic mutations — pending removals and favorite overrides — to an already
+ * mapped [MediaState] without re-running [mapMediaToItem]. Removed group representatives
+ * promote their first surviving member so grouped stacks stay consistent, and headers whose
+ * section loses every item are dropped.
+ */
+internal fun MediaState<Media.UriMedia>.applyOptimisticMutations(
+    pendingRemovalIds: Set<Long>,
+    favoriteOverrides: Map<Long, Boolean>,
+    dropUnfavorited: Boolean = false,
+): MediaState<Media.UriMedia> {
+    if (pendingRemovalIds.isEmpty() && favoriteOverrides.isEmpty()) return this
+
+    fun Media.UriMedia.mutated(): Media.UriMedia? {
+        if (id in pendingRemovalIds) return null
+        val effective = favoriteOverrides[id]?.let { fav ->
+            if ((favorite == 1) != fav) copy(favorite = if (fav) 1 else 0) else this
+        } ?: this
+        return if (dropUnfavorited && effective.favorite != 1) null else effective
+    }
+
+    // Mutate groups first — representative promotion depends on surviving members.
+    // promoted maps a removed representative's id to its replacement media.
+    val promoted = HashMap<Long, Media.UriMedia>()
+    val newGroups = HashMap<Long, List<Media.UriMedia>>(mediaGroups.size)
+    mediaGroups.forEach { (repId, members) ->
+        val surviving = members.mapNotNull { it.mutated() }
+        if (surviving.isNotEmpty()) {
+            val rep = if (surviving.any { it.id == repId }) {
+                surviving.first { it.id == repId }
+            } else {
+                surviving.first().also { promoted[repId] = it }
+            }
+            if (surviving.size > 1) newGroups[rep.id] = surviving
+        }
+    }
+
+    fun List<MediaItem<Media.UriMedia>>.mutatedItems(): List<MediaItem<Media.UriMedia>> {
+        val out = ArrayList<MediaItem<Media.UriMedia>>(size)
+        var heldHeaders: MutableList<MediaItem.Header<Media.UriMedia>>? = null
+        for (item in this) {
+            when (item) {
+                is MediaItem.Header -> {
+                    if (heldHeaders == null) heldHeaders = ArrayList(2)
+                    heldHeaders.add(
+                        if (pendingRemovalIds.isEmpty()) item
+                        else item.copy(data = item.data - pendingRemovalIds)
+                    )
+                }
+                is MediaItem.MediaViewItem -> {
+                    val replacement = item.media.mutated() ?: promoted[item.media.id]
+                    if (replacement != null) {
+                        heldHeaders?.let { out.addAll(it); heldHeaders = null }
+                        val group = newGroups[replacement.id]
+                        out.add(
+                            item.copy(
+                                media = replacement,
+                                stackCount = group?.size ?: 1,
+                                isCloudGroup = item.isCloudGroup && group != null
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        return out
+    }
+
+    val newMedia = media.mapNotNull { it.mutated() }
+    val newPagerMedia = pagerMedia.mapNotNull { it.mutated() ?: promoted[it.id] }
+    val newHeaders = headers.mapNotNull { header ->
+        header.copy(data = header.data - pendingRemovalIds)
+            .takeIf { it.data.isNotEmpty() }
+    }
+    val newCloudBackups = cloudBackups.mapNotNull { (localId, copies) ->
+        if (localId in pendingRemovalIds) return@mapNotNull null
+        val mutatedCopies = copies.mapNotNull { it.mutated() }
+        if (mutatedCopies.isEmpty()) null else localId to mutatedCopies
+    }.toMap()
+
+    return copy(
+        media = newMedia,
+        pagerMedia = newPagerMedia,
+        mediaGroups = newGroups,
+        mappedMedia = mappedMedia.mutatedItems(),
+        mappedMediaWithMonthly = mappedMediaWithMonthly.mutatedItems(),
+        mappedMediaWithYearly = mappedMediaWithYearly.mutatedItems(),
+        headers = newHeaders,
+        cloudBackups = newCloudBackups
+    )
+}

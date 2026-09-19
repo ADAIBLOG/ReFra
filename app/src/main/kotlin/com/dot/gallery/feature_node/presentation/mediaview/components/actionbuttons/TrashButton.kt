@@ -10,7 +10,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.res.stringResource
 import com.dot.gallery.R
+import com.dot.gallery.core.LocalMediaDistributor
 import com.dot.gallery.core.LocalMediaHandler
+import com.dot.gallery.core.PendingRemovalScope
 import com.dot.gallery.core.Settings.Misc.rememberTrashEnabled
 import com.dot.gallery.core.util.SdkCompat
 import com.dot.gallery.feature_node.domain.model.Media
@@ -37,6 +39,7 @@ fun <T : Media> TrashButton(
     onTrashConfirmed: () -> Unit = {}
 ) {
     val handler = LocalMediaHandler.current
+    val distributor = LocalMediaDistributor.current
     var shouldMoveToTrash by rememberSaveable { mutableStateOf(true) }
     val state = rememberAppBottomSheetState()
     val scope = rememberCoroutineScope()
@@ -54,6 +57,17 @@ fun <T : Media> TrashButton(
     } else {
         R.string.action_delete_permanently
     }
+    // A trashed item is arriving in the trash view (so the mark must not hide it there);
+    // every other confirmation removes it from all views.
+    val pendingScope = if (effectiveAction == TrashDialogAction.TRASH) {
+        PendingRemovalScope.NON_TRASH
+    } else {
+        PendingRemovalScope.EVERYWHERE
+    }
+    val markPendingRemoval = {
+        distributor.markPendingRemoval(setOf(media.id), pendingScope)
+        onTrashConfirmed()
+    }
     val result = rememberActivityResult(
         onResultCanceled = {
             scope.launch {
@@ -61,7 +75,7 @@ fun <T : Media> TrashButton(
                 shouldMoveToTrash = true
             }
         },
-        onResultOk = onTrashConfirmed
+        onResultOk = markPendingRemoval
     )
     MediaViewButton(
         currentMedia = media,
@@ -96,6 +110,10 @@ fun <T : Media> TrashButton(
             it.forEach { media ->
                 deleteMedia(currentVault, media) {}
             }
+            distributor.markPendingRemoval(
+                it.map { m -> m.id }.toSet(),
+                PendingRemovalScope.EVERYWHERE
+            )
             onTrashConfirmed()
         } else {
             val mutationResult = if (effectiveAction == TrashDialogAction.TRASH) {
@@ -104,7 +122,7 @@ fun <T : Media> TrashButton(
                 handler.deleteMedia(result, it)
             }
             when (mutationResult) {
-                MediaMutationResult.COMPLETED -> onTrashConfirmed()
+                MediaMutationResult.COMPLETED -> markPendingRemoval()
                 MediaMutationResult.FAILED -> deletionError.show()
                 MediaMutationResult.REQUEST_LAUNCHED -> Unit
             }

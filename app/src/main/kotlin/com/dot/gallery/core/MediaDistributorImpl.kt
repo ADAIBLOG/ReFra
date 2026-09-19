@@ -68,6 +68,7 @@ import com.dot.gallery.feature_node.domain.util.isCloud
 import com.dot.gallery.feature_node.domain.util.mapLocked
 import com.dot.gallery.feature_node.domain.util.mapPinned
 import com.dot.gallery.feature_node.domain.util.removeBlacklisted
+import com.dot.gallery.feature_node.presentation.util.applyOptimisticMutations
 import com.dot.gallery.feature_node.presentation.util.mapMediaToItem
 import com.dot.gallery.feature_node.presentation.util.mediaFlow
 
@@ -99,6 +100,7 @@ import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -157,6 +159,9 @@ internal fun expandLocationMediaIds(
     }
 }
 
+private const val PENDING_REMOVAL_TTL_MS = 30_000L
+private const val FAVORITE_OVERRIDE_TTL_MS = 15_000L
+
 @Singleton
 class MediaDistributorImpl @Inject constructor(
     @param:ApplicationContext private val context: Context,
@@ -199,6 +204,104 @@ class MediaDistributorImpl @Inject constructor(
      * Pull-to-refresh
      */
     override val isRefreshing: MutableStateFlow<Boolean> = MutableStateFlow(false)
+
+    // === Optimistic mutations ===
+    // Media ids confirmed for trash/delete/restore are hidden from the media flows until the
+    // underlying source catches up, and favorite toggles are applied over the source the same
+    // way. Entries carry a timestamp so a silently-failed mutation can't hide an item or pin
+    // a stale favorite indefinitely.
+    private data class PendingRemovalMark(val scope: PendingRemovalScope, val atMs: Long)
+    private data class FavoriteOverrideMark(val favorite: Boolean, val atMs: Long)
+
+    private val _pendingRemoval = MutableStateFlow<Map<Long, PendingRemovalMark>>(emptyMap())
+    private val _favoriteOverrideMarks =
+        MutableStateFlow<Map<Long, FavoriteOverrideMark>>(emptyMap())
+
+    override val pendingRemovalIds: StateFlow<Set<Long>> =
+        _pendingRemoval.map { it.keys }
+            .stateIn(appScope, sharingMethod, emptySet())
+
+    override val favoriteOverrides: StateFlow<Map<Long, Boolean>> =
+        _favoriteOverrideMarks.map { marks -> marks.mapValues { it.value.favorite } }
+            .stateIn(appScope, sharingMethod, emptyMap())
+
+    override fun markPendingRemoval(ids: Collection<Long>, scope: PendingRemovalScope) {
+        if (ids.isEmpty()) return
+        val now = System.currentTimeMillis()
+        _pendingRemoval.update { current ->
+            current + ids.associateWith { PendingRemovalMark(scope, now) }
+        }
+    }
+
+    override fun unmarkPendingRemoval(ids: Collection<Long>) {
+        if (ids.isEmpty()) return
+        _pendingRemoval.update { it - ids.toSet() }
+    }
+
+    override fun setFavoriteOverride(mediaId: Long, favorite: Boolean) {
+        _favoriteOverrideMarks.update {
+            it + (mediaId to FavoriteOverrideMark(favorite, System.currentTimeMillis()))
+        }
+    }
+
+    override fun clearFavoriteOverride(mediaId: Long) {
+        _favoriteOverrideMarks.update { it - mediaId }
+    }
+
+    /**
+     * Appends optimistic mutations (pending removals + favorite overrides) to a media flow.
+     * Reconcile rules run against each emitted raw list: a pending id that reappears after
+     * being observed absent (trash restore, external re-add) is un-marked, and overrides the
+     * source already reflects are dropped. Expired entries are pruned on the next emission.
+     */
+    private fun Flow<MediaState<Media.UriMedia>>.withOptimisticMutations(
+        inTrashView: Boolean = false,
+        dropUnfavorited: Boolean = false,
+    ): Flow<MediaState<Media.UriMedia>> {
+        val seenAbsent = HashSet<Long>()
+        return combine(this, _pendingRemoval, _favoriteOverrideMarks) { state, pending, favs ->
+            val now = System.currentTimeMillis()
+            val activePending = pending.filterValues {
+                now - it.atMs < PENDING_REMOVAL_TTL_MS &&
+                        (it.scope == PendingRemovalScope.EVERYWHERE ||
+                                (inTrashView == (it.scope == PendingRemovalScope.TRASH_ONLY)))
+            }
+            val activeFavs = favs.filterValues { now - it.atMs < FAVORITE_OVERRIDE_TTL_MS }
+            if (pending.size != activePending.size) {
+                _pendingRemoval.update { it.filterValues { m -> now - m.atMs < PENDING_REMOVAL_TTL_MS } }
+            }
+            if (favs.size != activeFavs.size) {
+                _favoriteOverrideMarks.update { it.filterValues { m -> now - m.atMs < FAVORITE_OVERRIDE_TTL_MS } }
+            }
+            if (state.media.isNotEmpty()) {
+                if (activePending.isNotEmpty()) {
+                    val rawIds = HashSet<Long>(state.media.size)
+                    state.media.forEach { rawIds.add(it.id) }
+                    activePending.keys.forEach { id -> if (id !in rawIds) seenAbsent.add(id) }
+                    seenAbsent.retainAll(activePending.keys)
+                    val returned = activePending.keys.filter { it in rawIds && it in seenAbsent }
+                    if (returned.isNotEmpty()) {
+                        _pendingRemoval.update { it - returned.toSet() }
+                    }
+                }
+                if (activeFavs.isNotEmpty()) {
+                    val landed = ArrayList<Long>()
+                    for (m in state.media) {
+                        val mark = activeFavs[m.id] ?: continue
+                        if ((m.favorite == 1) == mark.favorite) landed.add(m.id)
+                    }
+                    if (landed.isNotEmpty()) {
+                        _favoriteOverrideMarks.update { it - landed.toSet() }
+                    }
+                }
+            }
+            state.applyOptimisticMutations(
+                pendingRemovalIds = activePending.keys,
+                favoriteOverrides = activeFavs.mapValues { it.value.favorite },
+                dropUnfavorited = dropUnfavorited
+            )
+        }
+    }
 
     override suspend fun invalidate() {
         isRefreshing.value = true
@@ -946,7 +1049,7 @@ class MediaDistributorImpl @Inject constructor(
                         )
                     }
                 }
-            }
+            }.withOptimisticMutations()
 
     private fun unsortedCloudAlbumTimelineMediaFlow(albumId: Long): Flow<MediaState<Media.UriMedia>> =
         combine(
@@ -976,7 +1079,7 @@ class MediaDistributorImpl @Inject constructor(
                 weeklyDateFormat = weeklyDateFormat,
                 dateSource = albumSort.dateSource
             )
-        }
+        }.withOptimisticMutations()
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Suppress("UNCHECKED_CAST")
@@ -1052,7 +1155,7 @@ class MediaDistributorImpl @Inject constructor(
                     )
                 }
             }
-        }
+        }.withOptimisticMutations()
 
 
     override val favoritesMediaFlow: SharedFlow<MediaState<Media.UriMedia>> =
@@ -1247,7 +1350,10 @@ class MediaDistributorImpl @Inject constructor(
             StartupTracer.dump()
         }
         it
-    }.shareIn(
+    }.withOptimisticMutations(
+        inTrashView = target == Constants.Target.TARGET_TRASH,
+        dropUnfavorited = target == Constants.Target.TARGET_FAVORITES
+    ).shareIn(
         scope = appScope,
         started = sharingMethod,
         replay = 1
@@ -1476,7 +1582,8 @@ class MediaDistributorImpl @Inject constructor(
                 weeklyDateFormat = weeklyDateFormat,
                 dateSource = albumSort.dateSource
             )
-        }.stateIn(appScope, sharingMethod, MediaState())
+        }.withOptimisticMutations()
+            .stateIn(appScope, sharingMethod, MediaState())
 
     /**
      * Search

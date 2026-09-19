@@ -36,6 +36,7 @@ fun <T : Media> MediaViewButton(
     title: String,
     enabled: Boolean = true,
     followTheme: Boolean = false,
+    iconModifier: Modifier = Modifier,
     onItemLongClick: ((T) -> Unit)? = null,
     onItemClick: (T) -> Unit
 ) {
@@ -88,7 +89,7 @@ fun <T : Media> MediaViewButton(
                 imageVector = imageVector,
                 colorFilter = ColorFilter.tint(tintColor),
                 contentDescription = title,
-                modifier = Modifier.size(24.dp)
+                modifier = Modifier.size(24.dp).then(iconModifier)
             )
         }
     }

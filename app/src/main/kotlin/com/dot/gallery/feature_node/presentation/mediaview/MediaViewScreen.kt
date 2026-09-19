@@ -25,6 +25,7 @@ import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -136,6 +137,7 @@ import com.dot.gallery.core.Constants.Animation.exitAnimation
 import com.dot.gallery.core.Constants.DEFAULT_TOP_BAR_ANIMATION_DURATION
 import com.dot.gallery.core.Constants.Target.TARGET_TRASH
 import com.dot.gallery.core.LocalEventHandler
+import com.dot.gallery.core.LocalMediaDistributor
 import com.dot.gallery.core.Settings
 import com.dot.gallery.core.Settings.Misc.rememberAutoContrast
 import com.dot.gallery.core.Settings.Misc.rememberAutoHideOnVideoPlay
@@ -660,6 +662,7 @@ fun <T : Media> MediaViewScreen(
 ) {
     ProvideInsets {
         val eventHandler = LocalEventHandler.current
+        val distributor = LocalMediaDistributor.current
         val dismissViewer = { onDismissRequest?.invoke() ?: eventHandler.navigateUp() }
         val context = LocalContext.current
         val rotateFailedText = stringResource(R.string.rotate_failed)
@@ -704,6 +707,11 @@ fun <T : Media> MediaViewScreen(
 
         // IDs of media confirmed for trash/delete but not yet removed from mediaState
         var pendingTrashIds by rememberSaveable { mutableStateOf(emptySet<Long>()) }
+
+        // The media currently flying out after a confirmed trash/delete/restore. The page
+        // swaps to the neighbor instantly once pending removal hides it; this thumbnail drops
+        // down-and-out so the reveal reads as a deletion rather than a silent swap.
+        var exitingMedia by remember { mutableStateOf<Media?>(null) }
 
         // Clean up pending IDs once the source has caught up
         LaunchedEffect(mediaState.value) {
@@ -750,8 +758,17 @@ fun <T : Media> MediaViewScreen(
                 },
             )
         }
+        // Resolved entry target. Once the viewer settles on a page the resolution is frozen:
+        // the entry media leaving the source afterwards (e.g. the user just deleted it) must
+        // not re-resolve to "not found" — the missing-target dismiss would pop the viewer back
+        // to the timeline instead of advancing to a neighbor page.
+        var frozenEntryPage by rememberSaveable(mediaId) { mutableIntStateOf(-1) }
+        var frozenEntryMemberId by rememberSaveable(mediaId) { mutableStateOf<Long?>(null) }
+        val entrySelection = if (frozenEntryPage >= 0) {
+            MediaViewerInitialSelection(frozenEntryPage, frozenEntryMemberId, true)
+        } else initialSelection
         // Use only primitive ids/sizes as saveable keys (avoid passing full media list object)
-        val initialPage = initialSelection.pageIndex
+        val initialPage = entrySelection.pageIndex
         var currentPage by rememberSaveable(initialPage) { mutableIntStateOf(initialPage) }
         var isVideoZoomed by rememberSaveable { mutableStateOf(false) }
         var isImageZoomed by rememberSaveable { mutableStateOf(false) }
@@ -764,7 +781,7 @@ fun <T : Media> MediaViewScreen(
         val viewerContentReady = isMediaViewerContentReady(
             selectionApplied = initialPageSetup,
             isLoading = mediaState.value.isLoading,
-            targetFound = initialSelection.found,
+            targetFound = entrySelection.found,
             currentPage = pagerState.currentPage,
             initialPage = initialPage,
         )
@@ -782,8 +799,8 @@ fun <T : Media> MediaViewScreen(
         }
 
         // Track which group member is selected (null = show representative/pager item)
-        var selectedMemberOverrideId by rememberSaveable(mediaId, initialSelection.memberId) {
-            mutableStateOf(initialSelection.memberId)
+        var selectedMemberOverrideId by rememberSaveable(mediaId, entrySelection.memberId) {
+            mutableStateOf(entrySelection.memberId)
         }
         var selectedMemberPage by rememberSaveable(mediaId, initialPage) {
             mutableIntStateOf(initialPage)
@@ -833,25 +850,27 @@ fun <T : Media> MediaViewScreen(
             ensureMetadataAvailable(currentMedia, metadataState.value)
         }
 
-        LaunchedEffect(mediaId, initialPage, initialSelection.found, mediaState.value.isLoading) {
-            if (!mediaState.value.isLoading && initialSelection.found && !initialPageSetup) {
+        LaunchedEffect(mediaId, initialPage, entrySelection.found, mediaState.value.isLoading) {
+            if (!mediaState.value.isLoading && entrySelection.found && !initialPageSetup) {
+                frozenEntryPage = entrySelection.pageIndex
+                frozenEntryMemberId = entrySelection.memberId
                 if (pagerState.currentPage != initialPage) {
                     pagerState.scrollToPage(initialPage)
                 }
                 currentPage = initialPage
                 selectedMemberPage = initialPage
-                selectedMemberOverrideId = initialSelection.memberId
+                selectedMemberOverrideId = entrySelection.memberId
                 initialPageSetup = true
             }
         }
         LaunchedEffect(
             mediaState.value.isLoading,
-            initialSelection.found,
+            entrySelection.found,
             pagerItems.isNotEmpty()
         ) {
             if (shouldDismissMissingMediaTarget(
                     isLoading = mediaState.value.isLoading,
-                    targetFound = initialSelection.found,
+                    targetFound = entrySelection.found,
                     hasMedia = pagerItems.isNotEmpty(),
                     isStandalone = isStandalone,
                 )
@@ -942,8 +961,8 @@ fun <T : Media> MediaViewScreen(
             if (!overlayMode || !sharedElementsEnabled || b == null) return@LaunchedEffect
             val enterMedia = withTimeoutOrNull(800) {
                 snapshotFlow {
-                    pagerItems.getOrNull(initialSelection.pageIndex)
-                        ?.takeIf { initialSelection.found }
+                    pagerItems.getOrNull(entrySelection.pageIndex)
+                        ?.takeIf { entrySelection.found }
                 }.first { it != null }
             } ?: return@LaunchedEffect
             val enterKey = MediaSharedElementKey.MediaKey(enterMedia.id)
@@ -2150,6 +2169,33 @@ fun <T : Media> MediaViewScreen(
                         }
                     }
                 }
+                // Deleted-media fly-away: the page already swapped to the neighbor underneath;
+                // this overlay drops the captured media's thumbnail down-and-out so the reveal
+                // reads as a removal rather than a silent swap.
+                exitingMedia?.let { exiting ->
+                    val exitProgress = remember(exiting.id) { Animatable(0f) }
+                    LaunchedEffect(exiting.id) {
+                        exitProgress.animateTo(
+                            targetValue = 1f,
+                            animationSpec = tween(320, easing = FastOutSlowInEasing)
+                        )
+                        if (exitingMedia?.id == exiting.id) exitingMedia = null
+                    }
+                    ViewerSharedElementThumbnail(
+                        media = exiting,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                val p = exitProgress.value
+                                alpha = 1f - p
+                                translationY = size.height * 0.45f * p
+                                val s = 1f - 0.15f * p
+                                scaleX = s
+                                scaleY = s
+                            },
+                    )
+                }
                 if (currentMedia?.isImage == true && isGestureEnabled) {
                     val gesturePadding = WindowInsets.systemGestures.asPaddingValues()
                     Spacer(
@@ -2569,7 +2615,8 @@ fun <T : Media> MediaViewScreen(
                                             isImageDark = isBottomDark,
                                             autoContrast = autoContrast,
                                             onTrashConfirmed = {
-                                                val trashedId = currentMedia?.id
+                                                val removedMedia = currentMedia
+                                                val trashedId = removedMedia?.id
                                                 if (trashedId != null) {
                                                     val newPending = pendingTrashIds + trashedId
                                                     pendingTrashIds = newPending
@@ -2582,6 +2629,8 @@ fun <T : Media> MediaViewScreen(
                                                     if (remaining <= 0 && !isStandalone) {
                                                         windowInsetsController.toggleSystemBars(show = true)
                                                         dismissViewer()
+                                                    } else {
+                                                        exitingMedia = removedMedia
                                                     }
                                                 }
                                             }

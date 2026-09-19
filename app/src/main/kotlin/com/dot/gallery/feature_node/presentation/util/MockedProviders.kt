@@ -13,6 +13,7 @@ import androidx.compose.ui.layout.ContentScale
 import com.dot.gallery.cloud.core.SyncState
 import com.dot.gallery.core.AlbumMediaLoadMode
 import com.dot.gallery.core.MediaDistributor
+import com.dot.gallery.core.PendingRemovalScope
 import com.dot.gallery.core.decoder.format.ImageReencoder
 import com.dot.gallery.core.metadata.MediaContainerFormat
 import com.dot.gallery.core.metadata.MetadataRemovalMode
@@ -83,6 +84,12 @@ open class MockedMediaDistributor: MediaDistributor {
     ): Flow<MediaState<Media.UriMedia>> = MutableStateFlow(MediaState())
     override val favoritesMediaFlow: StateFlow<MediaState<Media.UriMedia>> = MutableStateFlow(MediaState())
     override val trashMediaFlow: StateFlow<MediaState<Media.UriMedia>> = MutableStateFlow(MediaState())
+    override val pendingRemovalIds: StateFlow<Set<Long>> = MutableStateFlow(emptySet())
+    override val favoriteOverrides: StateFlow<Map<Long, Boolean>> = MutableStateFlow(emptyMap())
+    override fun markPendingRemoval(ids: Collection<Long>, scope: PendingRemovalScope) {}
+    override fun unmarkPendingRemoval(ids: Collection<Long>) {}
+    override fun setFavoriteOverride(mediaId: Long, favorite: Boolean) {}
+    override fun clearFavoriteOverride(mediaId: Long) {}
     override val cloudSyncStates: StateFlow<Map<Long, SyncState>> = MutableStateFlow(emptyMap())
     override val metadataFlow: StateFlow<MediaMetadataState> = MutableStateFlow(MediaMetadataState())
     override val locationsMediaFlow: SharedFlow<List<LocationMedia>> = MutableStateFlow(emptyList())

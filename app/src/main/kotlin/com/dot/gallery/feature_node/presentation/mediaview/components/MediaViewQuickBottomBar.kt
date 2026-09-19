@@ -10,8 +10,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -20,7 +22,9 @@ import com.dot.gallery.R
 import com.dot.gallery.cloud.core.CloudRuntimeSettings
 import com.dot.gallery.cloud.ui.CloudSelectionViewModel
 import com.dot.gallery.core.LocalEventHandler
+import com.dot.gallery.core.LocalMediaDistributor
 import com.dot.gallery.core.LocalMediaHandler
+import com.dot.gallery.core.PendingRemovalScope
 import com.dot.gallery.feature_node.presentation.mediaview.LocalMediaViewerVisualPolicy
 import com.dot.gallery.feature_node.presentation.mediaview.viewerActionCapabilities
 import com.dot.gallery.core.Settings.Misc.rememberShowFavoriteButton
@@ -110,9 +114,18 @@ fun <T : Media> MediaViewQuickBottomBar(
         )
         if (currentMedia.isTrashed) {
             val scope = rememberCoroutineScope()
+            val distributor = LocalMediaDistributor.current
             val restoreSheetState = rememberAppBottomSheetState()
             val deleteSheetState = rememberAppBottomSheetState()
-            val result = rememberActivityResult(onResultOk = onTrashConfirmed)
+            // Scope of the in-flight restore/delete request — restore only leaves the trash
+            // view while a permanent delete leaves every view.
+            var pendingRemovalScope by remember {
+                mutableStateOf(PendingRemovalScope.EVERYWHERE)
+            }
+            val result = rememberActivityResult(onResultOk = {
+                distributor.markPendingRemoval(setOf(currentMedia.id), pendingRemovalScope)
+                onTrashConfirmed()
+            })
             if (capabilities.trash) {
                 MediaViewButton(
                     currentMedia = currentMedia,
@@ -141,7 +154,18 @@ fun <T : Media> MediaViewQuickBottomBar(
                         mediaList = it,
                         trash = false
                     )
-                    if (mutationResult == MediaMutationResult.COMPLETED) onTrashConfirmed()
+                    when (mutationResult) {
+                        MediaMutationResult.COMPLETED -> {
+                            distributor.markPendingRemoval(
+                                it.map { m -> m.id }.toSet(),
+                                PendingRemovalScope.TRASH_ONLY
+                            )
+                            onTrashConfirmed()
+                        }
+                        MediaMutationResult.REQUEST_LAUNCHED ->
+                            pendingRemovalScope = PendingRemovalScope.TRASH_ONLY
+                        MediaMutationResult.FAILED -> Unit
+                    }
                 }
                 TrashDialog(
                     appBottomSheetState = deleteSheetState,
@@ -149,7 +173,18 @@ fun <T : Media> MediaViewQuickBottomBar(
                     action = TrashDialogAction.DELETE
                 ) {
                     val mutationResult = handler.deleteMedia(result = result, mediaList = it)
-                    if (mutationResult == MediaMutationResult.COMPLETED) onTrashConfirmed()
+                    when (mutationResult) {
+                        MediaMutationResult.COMPLETED -> {
+                            distributor.markPendingRemoval(
+                                it.map { m -> m.id }.toSet(),
+                                PendingRemovalScope.EVERYWHERE
+                            )
+                            onTrashConfirmed()
+                        }
+                        MediaMutationResult.REQUEST_LAUNCHED ->
+                            pendingRemovalScope = PendingRemovalScope.EVERYWHERE
+                        MediaMutationResult.FAILED -> Unit
+                    }
                 }
             }
         } else {

@@ -86,6 +86,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dot.gallery.R
 import com.dot.gallery.core.LocalMediaDistributor
 import com.dot.gallery.core.LocalMediaHandler
+import com.dot.gallery.core.PendingRemovalScope
 import com.dot.gallery.core.LocalMediaSelector
 import com.dot.gallery.core.Settings
 import com.dot.gallery.core.Settings.Misc.rememberAllowBlur
@@ -154,6 +155,7 @@ fun <T : Media> BoxScope.SelectionSheet(
     val isSelectionActive by selector.isSelectionActive.collectAsStateWithLifecycle()
 
     val handler = LocalMediaHandler.current
+    val distributor = LocalMediaDistributor.current
     val context = LocalContext.current
     val downloadingText = stringResource(R.string.downloading)
     val downloadCompleteText = stringResource(R.string.download_complete)
@@ -219,8 +221,38 @@ fun <T : Media> BoxScope.SelectionSheet(
             .filterNot { it.isCloud }
             .map { it.getUri() }
     }
+    // Ids whose favorite toggle is waiting on the system favorite request; the overrides
+    // applied for instant feedback are rolled back if the request is canceled.
+    var pendingFavoriteIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     val result = rememberActivityResult(
+        onResultCanceled = {
+            pendingFavoriteIds.forEach { distributor.clearFavoriteOverride(it) }
+            pendingFavoriteIds = emptySet()
+        },
         onResultOk = {
+            selector.clearSelection()
+            if (trashSheetState.isVisible) {
+                scope.launch {
+                    trashSheetState.hide()
+                    shouldMoveToTrash = true
+                }
+            }
+        }
+    )
+    // Ids of the media the in-flight system-deletion request targets, stashed so the OK
+    // branch can mark them pending removal. `null` means no deletion request is in flight.
+    var pendingDeletionIds by remember { mutableStateOf<Set<Long>?>(null) }
+    // Scope of the in-flight deletion request — EVERYWHERE for permanent delete,
+    // NON_TRASH for trash (the item is arriving in the trash view),
+    // TRASH_ONLY for restore out of trash.
+    var pendingDeletionScope by remember {
+        mutableStateOf(PendingRemovalScope.EVERYWHERE)
+    }
+    val deletionResult = rememberActivityResult(
+        onResultCanceled = { pendingDeletionIds = null },
+        onResultOk = {
+            pendingDeletionIds?.let { distributor.markPendingRemoval(it, pendingDeletionScope) }
+            pendingDeletionIds = null
             selector.clearSelection()
             if (trashSheetState.isVisible) {
                 scope.launch {
@@ -555,7 +587,13 @@ fun <T : Media> BoxScope.SelectionSheet(
                             imageVector = SelectionAction.FAVORITE.icon,
                             title = stringResource(SelectionAction.FAVORITE.labelRes)
                         ) {
-                            scope.launch { cloudSelectionViewModel.toggleFavorite(result, selectedMedia) }
+                            scope.launch {
+                                val targets = selectedMedia.toList()
+                                targets.forEach {
+                                    distributor.setFavoriteOverride(it.id, it.favorite == 0)
+                                }
+                                cloudSelectionViewModel.toggleFavorite(result, targets)
+                            }
                         }
                     }
                     // Download to device.
@@ -618,7 +656,18 @@ fun <T : Media> BoxScope.SelectionSheet(
                                     title = stringResource(action.labelRes)
                                 ) {
                                     scope.launch {
-                                        handler.toggleFavorite(result = result, selectedMedia)
+                                        val targets = selectedMedia.toList()
+                                        // Instant feedback: pin the toggled state over the
+                                        // flows until MediaStore/the provider lands it.
+                                        targets.forEach {
+                                            distributor.setFavoriteOverride(
+                                                it.id,
+                                                it.favorite == 0
+                                            )
+                                        }
+                                        pendingFavoriteIds =
+                                            targets.mapTo(HashSet()) { it.id }
+                                        handler.toggleFavorite(result = result, targets)
                                     }
                                 }
                             }
@@ -928,12 +977,29 @@ fun <T : Media> BoxScope.SelectionSheet(
         data = selectedMedia,
         action = effectiveTrashAction,
     ) {
-        val mutationResult = if (effectiveTrashAction == TrashDialogAction.TRASH) {
-            handler.trashMedia(result, it, true)
+        // A trashed item leaves the regular views but is arriving in the trash view; a
+        // permanent delete leaves every view.
+        val removalScope = if (effectiveTrashAction == TrashDialogAction.TRASH) {
+            PendingRemovalScope.NON_TRASH
         } else {
-            handler.deleteMedia(result, it)
+            PendingRemovalScope.EVERYWHERE
         }
-        if (mutationResult == MediaMutationResult.COMPLETED) selector.clearSelection()
+        val mutationResult = if (effectiveTrashAction == TrashDialogAction.TRASH) {
+            handler.trashMedia(deletionResult, it, true)
+        } else {
+            handler.deleteMedia(deletionResult, it)
+        }
+        when (mutationResult) {
+            MediaMutationResult.COMPLETED -> {
+                distributor.markPendingRemoval(it.map { m -> m.id }, removalScope)
+                selector.clearSelection()
+            }
+            MediaMutationResult.REQUEST_LAUNCHED -> {
+                pendingDeletionIds = it.mapTo(HashSet()) { m -> m.id }
+                pendingDeletionScope = removalScope
+            }
+            MediaMutationResult.FAILED -> Unit
+        }
     }
 
     ConfirmationSheet(
@@ -981,8 +1047,19 @@ fun <T : Media> BoxScope.SelectionSheet(
                     Toast.makeText(context, privateFolderMovingText, Toast.LENGTH_SHORT).show()
                     val moved = privateFolderMoveViewModel.copyIntoPrivateFolder(toMove)
                     if (moved.isNotEmpty()) {
-                        if (handler.deleteMedia(result, moved) == MediaMutationResult.COMPLETED) {
-                            selector.clearSelection()
+                        when (handler.deleteMedia(deletionResult, moved)) {
+                            MediaMutationResult.COMPLETED -> {
+                                distributor.markPendingRemoval(
+                                    moved.map { it.id },
+                                    PendingRemovalScope.EVERYWHERE
+                                )
+                                selector.clearSelection()
+                            }
+                            MediaMutationResult.REQUEST_LAUNCHED -> {
+                                pendingDeletionIds = moved.mapTo(HashSet()) { it.id }
+                                pendingDeletionScope = PendingRemovalScope.EVERYWHERE
+                            }
+                            MediaMutationResult.FAILED -> Unit
                         }
                     } else {
                         Toast.makeText(context, privateFolderMoveFailedText, Toast.LENGTH_SHORT).show()
@@ -1045,14 +1122,23 @@ fun <T : Media> BoxScope.SelectionSheet(
         onConfirm = {
             val toTrash = selectedMedia.toList()
             scope.launch {
-                when (cloudSelectionViewModel.trash(result, toTrash)) {
-                    MediaMutationResult.COMPLETED -> selector.clearSelection()
+                when (cloudSelectionViewModel.trash(deletionResult, toTrash)) {
+                    MediaMutationResult.COMPLETED -> {
+                        distributor.markPendingRemoval(
+                            toTrash.map { it.id },
+                            PendingRemovalScope.NON_TRASH
+                        )
+                        selector.clearSelection()
+                    }
                     MediaMutationResult.FAILED -> Toast.makeText(
                         context,
                         cloudDeleteFailedText,
                         Toast.LENGTH_SHORT
                     ).show()
-                    MediaMutationResult.REQUEST_LAUNCHED -> Unit
+                    MediaMutationResult.REQUEST_LAUNCHED -> {
+                        pendingDeletionIds = toTrash.mapTo(HashSet()) { it.id }
+                        pendingDeletionScope = PendingRemovalScope.NON_TRASH
+                    }
                 }
             }
         }
@@ -1065,14 +1151,23 @@ fun <T : Media> BoxScope.SelectionSheet(
         onConfirm = {
             val toDelete = selectedMedia.toList()
             scope.launch {
-                when (cloudSelectionViewModel.delete(result, toDelete)) {
-                    MediaMutationResult.COMPLETED -> selector.clearSelection()
+                when (cloudSelectionViewModel.delete(deletionResult, toDelete)) {
+                    MediaMutationResult.COMPLETED -> {
+                        distributor.markPendingRemoval(
+                            toDelete.map { it.id },
+                            PendingRemovalScope.EVERYWHERE
+                        )
+                        selector.clearSelection()
+                    }
                     MediaMutationResult.FAILED -> Toast.makeText(
                         context,
                         cloudDeleteFailedText,
                         Toast.LENGTH_SHORT
                     ).show()
-                    MediaMutationResult.REQUEST_LAUNCHED -> Unit
+                    MediaMutationResult.REQUEST_LAUNCHED -> {
+                        pendingDeletionIds = toDelete.mapTo(HashSet()) { it.id }
+                        pendingDeletionScope = PendingRemovalScope.EVERYWHERE
+                    }
                 }
             }
         }
