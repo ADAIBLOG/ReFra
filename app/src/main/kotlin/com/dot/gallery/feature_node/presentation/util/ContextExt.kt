@@ -16,6 +16,7 @@ import android.content.pm.ActivityInfo.COLOR_MODE_DEFAULT
 import android.content.pm.ActivityInfo.COLOR_MODE_HDR
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
+import android.content.res.Resources
 import android.net.Uri
 import android.os.Build
 import com.dot.gallery.core.util.HdrCapabilities
@@ -499,6 +500,13 @@ fun launcherAliasFor(nameAlias: String, logoAlias: String): String {
 }
 
 /**
+ * Whether a launcher [activity-alias] short name points at one of the
+ * Gallery-logo variants.
+ */
+fun launcherAliasHasGalleryLogo(alias: String): Boolean =
+    alias.endsWith("GalleryLogo")
+
+/**
  * Enable the launcher alias matching the given app-name + app-logo combination and disable
  * all others. [logoAlias] defaults to the ReFra logo for backward compatibility with callers
  * that only toggle the app name.
@@ -524,6 +532,27 @@ fun Context.changeAppAlias(nameAlias: String, logoAlias: String = "ReFra") {
             newState,
             PackageManager.DONT_KILL_APP
         )
+    }
+    applyLauncherSplashTheme(launcherAliasHasGalleryLogo(targetAlias))
+}
+
+/**
+ * Match the splash screen to the launcher logo. On API 31+ the theme override is
+ * persisted per package and used for subsequent launches; [Resources.ID_NULL]
+ * restores the manifest theme. Below API 31 the compat splash resolves its icon
+ * from the activity theme, so the Gallery splash theme is applied instead — this
+ * only has an effect when called before the activity's first draw (MainActivity
+ * does so before installSplashScreen).
+ */
+fun Context.applyLauncherSplashTheme(galleryLogo: Boolean) {
+    val activity = this as? Activity ?: return
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        activity.splashScreen.setSplashScreenTheme(
+            if (galleryLogo) R.style.Theme_Gallery_Splash_Gallery
+            else Resources.ID_NULL
+        )
+    } else if (galleryLogo) {
+        activity.setTheme(R.style.Theme_Gallery_Splash_Gallery)
     }
 }
 

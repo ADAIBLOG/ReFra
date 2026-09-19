@@ -67,6 +67,9 @@ import com.dot.gallery.feature_node.presentation.storycards.StoryViewerScreen
 import com.dot.gallery.feature_node.presentation.storycards.StoryViewerSnapshot
 import com.dot.gallery.feature_node.presentation.util.LocalHazeState
 import com.dot.gallery.feature_node.presentation.util.Screen
+import com.dot.gallery.feature_node.presentation.util.applyLauncherSplashTheme
+import com.dot.gallery.feature_node.presentation.util.currentLauncherAlias
+import com.dot.gallery.feature_node.presentation.util.launcherAliasHasGalleryLogo
 import com.dot.gallery.feature_node.presentation.util.printWarning
 import com.dot.gallery.feature_node.presentation.util.toggleOrientation
 import com.dot.gallery.ui.theme.GalleryTheme
@@ -106,6 +109,9 @@ class MainActivity : AppCompatActivity() {
     @OptIn(ExperimentalHazeMaterialsApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         val activitySpan = StartupTracer.begin("MainActivity.onCreate")
+        // Match the splash icon to the enabled launcher alias before the theme is
+        // read by installSplashScreen (and to re-assert the persisted override).
+        applyLauncherSplashTheme(launcherAliasHasGalleryLogo(currentLauncherAlias()))
         val splashScreen = StartupTracer.trace("MainActivity.installSplashScreen") { installSplashScreen() }
         splashScreen.setKeepOnScreenCondition { !startupContentInstalled }
         StartupTracer.trace("MainActivity.super.onCreate (Hilt DI)") {

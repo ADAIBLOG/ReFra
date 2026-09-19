@@ -11,5 +11,15 @@
         <item name="postSplashScreenTheme">@style/Theme.Gallery</item>
     </style>
 
+    <!-- Same splash treatment but with the legacy Gallery logo. Applied when a
+         Gallery-logo launcher alias is active: persisted through
+         SplashScreen.setSplashScreenTheme on API 31+, or set via Activity.setTheme
+         before installSplashScreen on older versions. -->
+    <style name="Theme.Gallery.Splash.Gallery" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splashColorBackground</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_gallery_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.Gallery</item>
+    </style>
+
 </resources>
 
