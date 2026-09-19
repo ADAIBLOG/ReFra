@@ -10,9 +10,12 @@ import com.dot.gallery.cloud.core.PersonInfo
 import com.dot.gallery.cloud.core.ProviderCapability
 import com.dot.gallery.cloud.core.ProviderType
 import com.dot.gallery.cloud.core.capabilities.PeopleCapableProvider
+import androidx.core.net.toUri
 import com.dot.gallery.cloud.data.dao.CloudMediaDao
 import com.dot.gallery.cloud.data.dao.DetectedFaceDao
 import com.dot.gallery.cloud.data.dao.PersonDao
+import com.dot.gallery.cloud.data.entity.FaceExclusionEntity
+import com.dot.gallery.cloud.data.entity.PersonEntity
 import com.dot.gallery.core.Resource
 import com.dot.gallery.core.ml.ModelGroup
 import com.dot.gallery.core.ml.ModelManager
@@ -20,8 +23,8 @@ import com.dot.gallery.feature_node.domain.model.Media
 import com.dot.gallery.feature_node.domain.repository.MediaRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -66,16 +69,16 @@ class LocalPeopleProvider @Inject constructor(
             )
         }
 
-    override fun getPersonMedia(personId: String): Flow<Resource<List<Media>>> = flow {
-        val ids = faceDao.getMediaIdsForPerson(personId).toHashSet()
-        if (ids.isEmpty()) {
-            emit(Resource.Success(emptyList()))
-            return@flow
+    override fun getPersonMedia(personId: String): Flow<Resource<List<Media>>> =
+        faceDao.observeMediaIdsForPerson(personId).map { ids ->
+            if (ids.isEmpty()) {
+                return@map Resource.Success(emptyList())
+            }
+            val idSet = ids.toHashSet()
+            val local = mediaRepository.getCompleteMedia().first().data.orEmpty()
+            val cloud = cloudMediaDao.getAllCachedAsync().map { it.toUriMedia() }
+            Resource.Success((local + cloud).filter { it.id in idSet })
         }
-        val local = mediaRepository.getCompleteMedia().first().data.orEmpty()
-        val cloud = cloudMediaDao.getAllCachedAsync().map { it.toUriMedia() }
-        emit(Resource.Success((local + cloud).filter { it.id in ids }))
-    }
 
     override fun getPersonThumbnailUrl(personId: String): String? = null
 
@@ -90,6 +93,43 @@ class LocalPeopleProvider @Inject constructor(
         faceDao.reassignPerson(sourceId, targetId)
         personDao.deleteById(sourceId)
         personDao.updateFaceCount(targetId, faceDao.countForPerson(targetId), System.currentTimeMillis())
+    }
+
+    /**
+     * Remove [mediaIds] from [personId]'s aggregation without deleting the media: face rows
+     * are un-assigned and a durable exclusion is recorded so future re-scans don't cluster
+     * the same media back onto this person.
+     *
+     * @return true if the person still exists afterwards (false when the last face was
+     *         removed and the empty person was deleted).
+     */
+    suspend fun removeMediaFromPerson(personId: String, mediaIds: List<Long>): Boolean {
+        if (mediaIds.isEmpty()) return personDao.getById(personId) != null
+        val person = personDao.getById(personId) ?: return false
+        val now = System.currentTimeMillis()
+        faceDao.insertExclusions(mediaIds.map { FaceExclusionEntity(it, personId, now) })
+        faceDao.unassignPersonMedia(personId, mediaIds)
+        val remaining = faceDao.countForPerson(personId)
+        if (remaining <= 0) {
+            deleteThumbnailFile(person)
+            personDao.deleteById(personId)
+            return false
+        }
+        personDao.updateFaceCount(personId, remaining, now)
+        // Drop the persisted centroid — the next index run rebuilds it without the
+        // removed faces (persisted/cluster count mismatch triggers a rebuild).
+        faceDao.deleteClusters(listOf(personId))
+        if (person.thumbnailMediaId?.let { it in mediaIds } == true) {
+            deleteThumbnailFile(person)
+            personDao.updateThumbnail(personId, null, null)
+        }
+        return true
+    }
+
+    private fun deleteThumbnailFile(person: PersonEntity) {
+        person.thumbnailUrl?.let { url ->
+            runCatching { File(requireNotNull(url.toUri().path)).delete() }
+        }
     }
 
     suspend fun setHidden(personId: String, hidden: Boolean) = personDao.setHidden(personId, hidden)

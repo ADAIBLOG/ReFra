@@ -70,6 +70,7 @@ import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
 import com.bumptech.glide.integration.compose.GlideImage
 import com.dot.gallery.R
 import com.dot.gallery.core.LocalEventHandler
+import com.dot.gallery.core.LocalMediaSelector
 import com.dot.gallery.core.navigate
 import com.dot.gallery.core.navigateUp
 import com.dot.gallery.core.presentation.components.SetupButton
@@ -126,6 +127,19 @@ fun PersonDetailScreen(
             }
         },
         navActionsContent = { _, _ -> },
+        selectionSheetContent = if (viewModel.isLocalPerson) {
+            {
+                val selector = LocalMediaSelector.current
+                PersonSelectionSheet(
+                    allMedia = mediaState.value,
+                    personName = personName,
+                    onRemoveFromPerson = { ids ->
+                        selector.clearSelection()
+                        viewModel.removeMediaFromPerson(ids) { eventHandler.navigateUp() }
+                    }
+                )
+            }
+        } else null,
         aboveGridContent = {
             PersonHeader(
                 state = state,

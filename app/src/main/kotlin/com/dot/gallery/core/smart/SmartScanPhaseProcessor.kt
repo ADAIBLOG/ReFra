@@ -865,6 +865,10 @@ class FaceIndexPhaseProcessor @Inject constructor(
         val scanDao = database.getSmartScanDao()
         val orphanPeople = faceDao.getOrphanPersonIds()
         val removedOrphans = faceDao.deleteOrphans()
+        faceDao.deleteOrphanExclusions()
+        val exclusionsByMedia = faceDao.getExclusions()
+            .groupBy({ it.mediaId }) { it.personId }
+            .mapValues { it.value.toHashSet() }
         val touchedPeople = orphanPeople.toHashSet()
         val now = System.currentTimeMillis()
         val states = scanDao.getFeatureStates(MediaFeature.FACE_DETECTION).associateBy { it.mediaId }
@@ -993,7 +997,8 @@ class FaceIndexPhaseProcessor @Inject constructor(
                                         item,
                                         face,
                                         bitmap,
-                                        touchedPeople
+                                        touchedPeople,
+                                        exclusionsByMedia[item.id].orEmpty()
                                     ),
                                     embedding = FloatVectorCodec.encode(embedding),
                                     left = face.left,
@@ -1159,11 +1164,15 @@ class FaceIndexPhaseProcessor @Inject constructor(
         media: Media.UriMedia,
         face: DetectedFaceBox,
         bitmap: Bitmap,
-        touchedPeople: MutableSet<String>
+        touchedPeople: MutableSet<String>,
+        excludedPersonIds: Set<String> = emptySet()
     ): String {
         var best: Cluster? = null
         var bestScore = Float.NEGATIVE_INFINITY
         clusters.forEach { cluster ->
+            // The user asserted this media does not contain this person — never
+            // re-cluster the face back onto it.
+            if (cluster.personId in excludedPersonIds) return@forEach
             val score = FaceHelper.cosine(embedding, cluster.normalizedCentroid)
             if (score > bestScore) {
                 best = cluster

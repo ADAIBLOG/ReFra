@@ -113,6 +113,9 @@ class FaceIndexerWorker @AssistedInject constructor(
         // Seed clusters from previously assigned faces.
         val clusters = buildInitialClusters()
         val touchedPeople = HashSet<String>()
+        val exclusionsByMedia = faceDao.getExclusions()
+            .groupBy({ it.mediaId }) { it.personId }
+            .mapValues { it.value.toHashSet() }
 
         setProgress(workDataOf(KEY_PROGRESS to 0f))
         val total = toIndex.size
@@ -140,7 +143,12 @@ class FaceIndexerWorker @AssistedInject constructor(
                 } else {
                     for (face in faces) {
                         val embedding = faceHelper.embed(bitmap, face.rectF)
-                        val personId = embedding?.let { assignCluster(it, clusters, item, face, bitmap, touchedPeople) }
+                        val personId = embedding?.let {
+                            assignCluster(
+                                it, clusters, item, face, bitmap, touchedPeople,
+                                exclusionsByMedia[item.id].orEmpty()
+                            )
+                        }
                         faceDao.insert(
                             DetectedFaceEntity(
                                 mediaId = item.id,
@@ -201,11 +209,15 @@ class FaceIndexerWorker @AssistedInject constructor(
         item: com.dot.gallery.feature_node.domain.model.Media.UriMedia,
         face: DetectedFaceBox,
         bitmap: Bitmap,
-        touched: HashSet<String>
+        touched: HashSet<String>,
+        excludedPersonIds: Set<String> = emptySet()
     ): String {
         var best: Cluster? = null
         var bestSim = -1f
         for (c in clusters) {
+            // The user asserted this media does not contain this person — never
+            // re-cluster the face back onto it.
+            if (c.personId in excludedPersonIds) continue
             val sim = FaceHelper.cosine(embedding, c.centroid)
             if (sim > bestSim) {
                 bestSim = sim

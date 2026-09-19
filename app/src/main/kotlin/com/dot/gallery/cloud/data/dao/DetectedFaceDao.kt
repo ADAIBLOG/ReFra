@@ -13,6 +13,7 @@ import androidx.room.Transaction
 import androidx.room.Upsert
 import com.dot.gallery.cloud.data.entity.DetectedFaceEntity
 import com.dot.gallery.cloud.data.entity.FaceClusterEntity
+import com.dot.gallery.cloud.data.entity.FaceExclusionEntity
 import kotlinx.coroutines.flow.Flow
 
 data class DetectedFaceHeader(
@@ -40,6 +41,9 @@ interface DetectedFaceDao {
 
     @Query("SELECT DISTINCT mediaId FROM detected_faces WHERE personId = :personId")
     suspend fun getMediaIdsForPerson(personId: String): List<Long>
+
+    @Query("SELECT DISTINCT mediaId FROM detected_faces WHERE personId = :personId")
+    fun observeMediaIdsForPerson(personId: String): Flow<List<Long>>
 
     @Query("SELECT * FROM detected_faces WHERE mediaId = :mediaId")
     suspend fun getByMedia(mediaId: Long): List<DetectedFaceEntity>
@@ -86,6 +90,9 @@ interface DetectedFaceDao {
     @Query("UPDATE detected_faces SET personId = :personId WHERE id = :faceId")
     suspend fun assignFace(faceId: Long, personId: String?)
 
+    @Query("UPDATE detected_faces SET personId = NULL WHERE personId = :personId AND mediaId IN (:mediaIds)")
+    suspend fun unassignPersonMedia(personId: String, mediaIds: List<Long>): Int
+
     @Query("DELETE FROM detected_faces WHERE mediaId = :mediaId")
     suspend fun deleteByMedia(mediaId: Long)
 
@@ -110,4 +117,24 @@ interface DetectedFaceDao {
 
     @Query("DELETE FROM detected_faces")
     suspend fun deleteAll()
+
+    // ── Face exclusions ("this media does not contain this person") ──
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertExclusions(exclusions: List<FaceExclusionEntity>)
+
+    @Query("SELECT * FROM face_exclusions")
+    suspend fun getExclusions(): List<FaceExclusionEntity>
+
+    @Query("DELETE FROM face_exclusions WHERE mediaId = :mediaId AND personId = :personId")
+    suspend fun deleteExclusion(mediaId: Long, personId: String)
+
+    @Query(
+        """
+        DELETE FROM face_exclusions
+        WHERE NOT EXISTS (SELECT 1 FROM media WHERE media.id = face_exclusions.mediaId)
+          AND NOT EXISTS (SELECT 1 FROM cloud_media WHERE cloud_media.globalMediaId = face_exclusions.mediaId)
+        """
+    )
+    suspend fun deleteOrphanExclusions(): Int
 }

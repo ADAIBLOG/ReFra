@@ -92,6 +92,19 @@ class PersonDetailViewModel @Inject constructor(
         viewModelScope.launch { localProvider()?.mergePeople(sourceId, targetPersonId) }
     }
 
+    /**
+     * Un-assign [mediaIds] from this person without deleting the media. The grid updates
+     * via the reactive people flow; [onPersonGone] fires when the removal emptied the
+     * person and it was deleted.
+     */
+    fun removeMediaFromPerson(mediaIds: List<Long>, onPersonGone: () -> Unit) {
+        val id = _uiState.value.person?.id ?: return
+        viewModelScope.launch {
+            val stillExists = localProvider()?.removeMediaFromPerson(id, mediaIds) ?: true
+            if (!stillExists) onPersonGone()
+        }
+    }
+
     fun blurEverywhere(useMosaic: Boolean) {
         val id = _uiState.value.person?.id ?: return
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {

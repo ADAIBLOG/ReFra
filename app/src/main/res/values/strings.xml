@@ -1920,6 +1920,13 @@
     <string name="cloud_person_blur_everywhere_summary">Obscure this person\'s face in every photo they appear in and save the results as new copies.</string>
     <string name="cloud_person_blurring_progress">Blurring %1$d / %2$d…</string>
     <string name="cloud_person_photo_count">%1$d photos</string>
+    <string name="cloud_person_remove_media">Remove from person</string>
+    <plurals name="cloud_person_remove_media_title">
+        <item quantity="one">Remove %1$d photo from %2$s?</item>
+        <item quantity="other">Remove %1$d photos from %2$s?</item>
+    </plurals>
+    <string name="cloud_person_remove_media_summary">The photos stay in your library — they will just no longer be counted as this person.</string>
+    <string name="cloud_person_remove_media_confirm">Remove</string>
     <string name="cloud_profile">Cloud Profile</string>
     <string name="cloud_profile_server">Cloud Server</string>
     <string name="cloud_profile_storage">Server Storage</string>

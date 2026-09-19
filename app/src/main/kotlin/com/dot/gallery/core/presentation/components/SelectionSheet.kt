@@ -147,6 +147,7 @@ fun <T : Media> BoxScope.SelectionSheet(
     isInVault: Boolean = false,
     isInPrivateFolder: Boolean = false,
     currentVault: Vault? = null,
+    extraBottomActions: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val albumsState = LocalMediaDistributor.current.albumsFlow.collectAsStateWithLifecycle()
     val selector = LocalMediaSelector.current
@@ -518,6 +519,7 @@ fun <T : Media> BoxScope.SelectionSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
+                extraBottomActions?.invoke(this)
                 if (isCloudSelection) {
                     if (albumsState.value.albums.isNotEmpty() && cloudActionCapabilities.copyOrMove) {
                         SelectionBarColumn(
@@ -1346,7 +1348,7 @@ private fun MiddleActionButton(
 }
 
 @Composable
-private fun RowScope.SelectionBarColumn(
+fun RowScope.SelectionBarColumn(
     imageVector: ImageVector,
     title: String,
     tabletMode: Boolean,

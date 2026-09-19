@@ -88,3 +88,28 @@ data class FaceClusterEntity(
         return result
     }
 }
+
+/**
+ * "This media does not contain this person" — a user assertion recorded when a photo is
+ * removed from a person. Kept separate from `detected_faces` so it survives re-detection
+ * (full-refresh scans delete face rows); the face indexers skip clusters excluded for the
+ * media being clustered instead of re-adding the face to the same person.
+ */
+@Entity(
+    tableName = "face_exclusions",
+    primaryKeys = ["mediaId", "personId"],
+    indices = [Index(value = ["personId"])],
+    foreignKeys = [
+        ForeignKey(
+            entity = PersonEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["personId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ]
+)
+data class FaceExclusionEntity(
+    val mediaId: Long,
+    val personId: String,
+    val createdAt: Long = 0L
+)
