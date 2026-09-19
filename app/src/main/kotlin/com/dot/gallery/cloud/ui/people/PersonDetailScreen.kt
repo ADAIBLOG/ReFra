@@ -8,11 +8,14 @@ package com.dot.gallery.cloud.ui.people
 import androidx.compose.animation.AnimatedContentScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -22,9 +25,11 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BlurOn
@@ -34,6 +39,7 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Merge
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -69,11 +75,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
 import com.bumptech.glide.integration.compose.GlideImage
 import com.dot.gallery.R
+import com.dot.gallery.cloud.core.PersonInfo
 import com.dot.gallery.core.LocalEventHandler
 import com.dot.gallery.core.LocalMediaSelector
 import com.dot.gallery.core.navigate
 import com.dot.gallery.core.navigateUp
 import com.dot.gallery.core.presentation.components.SetupButton
+import com.dot.gallery.feature_node.domain.model.Media
 import com.dot.gallery.feature_node.domain.model.MediaMetadataState
 import com.dot.gallery.feature_node.domain.util.getUri
 import com.dot.gallery.feature_node.presentation.common.MediaScreen
@@ -96,6 +104,8 @@ fun PersonDetailScreen(
     val blurProgress by viewModel.blurProgress.collectAsStateWithLifecycle()
     val mergeCandidates by viewModel.mergeCandidates.collectAsStateWithLifecycle()
     val personMedia by viewModel.personMedia.collectAsStateWithLifecycle()
+    val personFaces by viewModel.personFaces.collectAsStateWithLifecycle()
+    val similarPeople by viewModel.similarPeople.collectAsStateWithLifecycle()
     var showRenameSheet by remember { mutableStateOf(false) }
     var editNameText by remember { mutableStateOf("") }
     var showBirthdayPicker by remember { mutableStateOf(false) }
@@ -141,21 +151,38 @@ fun PersonDetailScreen(
             }
         } else null,
         aboveGridContent = {
-            PersonHeader(
-                state = state,
-                isLocalPerson = viewModel.isLocalPerson,
-                blurProgress = blurProgress,
-                onRenameClick = {
-                    editNameText = state.person?.name ?: ""
-                    showRenameSheet = true
-                },
-                onBirthdayClick = { showBirthdayPicker = true },
-                onHideClick = { viewModel.hidePerson { eventHandler.navigateUp() } },
-                onBlurEverywhereClick = { showBlurDialog = true },
-                canMerge = mergeCandidates.isNotEmpty(),
-                onMergeClick = { showMergeDialog = true },
-                onSetCoverClick = { showCoverDialog = true }
-            )
+            Column(modifier = Modifier.fillMaxWidth()) {
+                PersonHeader(
+                    state = state,
+                    isLocalPerson = viewModel.isLocalPerson,
+                    photoCount = personMedia.size,
+                    dateRange = remember(personMedia) { personDateRange(personMedia) },
+                    blurProgress = blurProgress,
+                    onRenameClick = {
+                        editNameText = state.person?.name ?: ""
+                        showRenameSheet = true
+                    },
+                    onBirthdayClick = { showBirthdayPicker = true },
+                    onHideClick = { viewModel.hidePerson { eventHandler.navigateUp() } },
+                    onBlurEverywhereClick = { showBlurDialog = true },
+                    canMerge = mergeCandidates.isNotEmpty(),
+                    onMergeClick = { showMergeDialog = true },
+                    onSetCoverClick = { showCoverDialog = true }
+                )
+                if (viewModel.isLocalPerson) {
+                    PersonFaceStrip(
+                        faces = personFaces,
+                        onRemoveFace = { face ->
+                            viewModel.removeFace(face.faceId) { eventHandler.navigateUp() }
+                        }
+                    )
+                    SimilarPeopleRow(
+                        people = similarPeople,
+                        currentName = personName,
+                        onMerge = { viewModel.mergeSimilarIntoCurrent(it.id) }
+                    )
+                }
+            }
         },
         onActivityResult = { },
         sharedTransitionScope = sharedTransitionScope,
@@ -355,7 +382,7 @@ fun PersonDetailScreen(
         }
     }
 
-    // Choose a new cover face from this person's photos.
+    // Choose a new cover — detected face crops make tighter covers than full photos.
     if (showCoverDialog) {
         ModalBottomSheet(onDismissRequest = { showCoverDialog = false }) {
             Column(
@@ -377,19 +404,36 @@ fun PersonDetailScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(personMedia, key = { it.id }) { media ->
-                        GlideImage(
-                            model = media.getUri(),
-                            contentDescription = null,
-                            modifier = Modifier
-                                .aspectRatio(1f)
-                                .clip(MaterialTheme.shapes.medium)
-                                .clickable {
-                                    viewModel.setCover(media)
-                                    showCoverDialog = false
-                                },
-                            contentScale = ContentScale.Crop
-                        )
+                    if (personFaces.isNotEmpty()) {
+                        items(personFaces, key = { it.faceId }) { face ->
+                            GlideImage(
+                                model = face.imageUri.toUri(),
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .aspectRatio(1f)
+                                    .clip(MaterialTheme.shapes.medium)
+                                    .clickable {
+                                        viewModel.setCoverFace(face)
+                                        showCoverDialog = false
+                                    },
+                                contentScale = ContentScale.Crop
+                            )
+                        }
+                    } else {
+                        items(personMedia, key = { it.id }) { media ->
+                            GlideImage(
+                                model = media.getUri(),
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .aspectRatio(1f)
+                                    .clip(MaterialTheme.shapes.medium)
+                                    .clickable {
+                                        viewModel.setCover(media)
+                                        showCoverDialog = false
+                                    },
+                                contentScale = ContentScale.Crop
+                            )
+                        }
                     }
                 }
             }
@@ -415,11 +459,39 @@ private fun formatBirthDateDisplay(birthDate: String): String {
     } catch (_: Exception) { birthDate }
 }
 
-@OptIn(ExperimentalGlideComposeApi::class)
+private fun personDateRange(media: List<Media.UriMedia>): Pair<String, String>? {
+    val stamps = media.map { it.definedTimestamp * 1000L }.filter { it > 0 }
+    if (stamps.isEmpty()) return null
+    val format = java.text.SimpleDateFormat("MMM yyyy", java.util.Locale.getDefault())
+    return format.format(java.util.Date(stamps.min())) to format.format(java.util.Date(stamps.max()))
+}
+
+/** Small action chip used by the single-scroll action row in [PersonHeader]. */
+@Composable
+private fun PersonActionChip(
+    onClick: () -> Unit,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String
+) {
+    SuggestionChip(
+        onClick = onClick,
+        label = { Text(label) },
+        icon = { Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp)) },
+        colors = SuggestionChipDefaults.suggestionChipColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            labelColor = MaterialTheme.colorScheme.onSurface,
+            iconContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    )
+}
+
+@OptIn(ExperimentalGlideComposeApi::class, ExperimentalFoundationApi::class)
 @Composable
 private fun PersonHeader(
     state: PersonDetailUiState,
     isLocalPerson: Boolean = false,
+    photoCount: Int = 0,
+    dateRange: Pair<String, String>? = null,
     blurProgress: Pair<Int, Int>? = null,
     onRenameClick: () -> Unit,
     onBirthdayClick: () -> Unit,
@@ -432,167 +504,308 @@ private fun PersonHeader(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(24.dp),
+            .padding(horizontal = 24.dp)
+            .padding(top = 8.dp, bottom = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        val thumbnailUrl = state.person?.thumbnailUrl
-        if (thumbnailUrl != null) {
-            GlideImage(
-                model = thumbnailUrl.toUri(),
-                contentDescription = state.person.name,
-                modifier = Modifier
-                    .size(120.dp)
-                    .clip(CircleShape),
-                contentScale = ContentScale.Crop
-            )
-        } else {
-            Box(
-                modifier = Modifier
-                    .size(120.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Outlined.Person, null,
-                    modifier = Modifier.size(60.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+        // Avatar — tappable cover picker for on-device people, with an edit badge.
+        Box(contentAlignment = Alignment.BottomEnd) {
+            val avatarModifier = Modifier
+                .size(112.dp)
+                .clip(CircleShape)
+                .let { base ->
+                    if (isLocalPerson) base.clickable(onClick = onSetCoverClick) else base
+                }
+            val thumbnailUrl = state.person?.thumbnailUrl
+            if (thumbnailUrl != null) {
+                GlideImage(
+                    model = thumbnailUrl.toUri(),
+                    contentDescription = state.person.name,
+                    modifier = avatarModifier,
+                    contentScale = ContentScale.Crop
                 )
-            }
-        }
-        Spacer(modifier = Modifier.height(12.dp))
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            SuggestionChip(
-                onClick = onRenameClick,
-                label = {
-                    Text(
-                        text = state.person?.name?.ifBlank { stringResource(R.string.cloud_person_add_name) }
-                            ?: stringResource(R.string.cloud_person_add_name)
-                    )
-                },
-                icon = {
+            } else {
+                Box(
+                    modifier = avatarModifier.background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center
+                ) {
                     Icon(
-                        Icons.Outlined.Edit,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                },
-                colors = SuggestionChipDefaults.suggestionChipColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    labelColor = MaterialTheme.colorScheme.onSurface,
-                    iconContentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            )
-            SuggestionChip(
-                onClick = onBirthdayClick,
-                label = {
-                    Text(
-                        text = state.person?.birthDate?.let { formatBirthDateDisplay(it) }
-                            ?: stringResource(R.string.cloud_person_add_birthday)
-                    )
-                },
-                icon = {
-                    Icon(
-                        Icons.Outlined.Cake,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                },
-                colors = SuggestionChipDefaults.suggestionChipColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    labelColor = MaterialTheme.colorScheme.onSurface,
-                    iconContentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            )
-        }
-        // On-device person management actions (hide + blur everywhere).
-        if (isLocalPerson) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SuggestionChip(
-                    onClick = onHideClick,
-                    label = { Text(stringResource(R.string.cloud_person_hide)) },
-                    icon = {
-                        Icon(
-                            Icons.Outlined.VisibilityOff,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    },
-                    colors = SuggestionChipDefaults.suggestionChipColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        labelColor = MaterialTheme.colorScheme.onSurface,
-                        iconContentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                )
-                SuggestionChip(
-                    onClick = onBlurEverywhereClick,
-                    label = { Text(stringResource(R.string.cloud_person_blur_everywhere)) },
-                    icon = {
-                        Icon(
-                            Icons.Outlined.BlurOn,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    },
-                    colors = SuggestionChipDefaults.suggestionChipColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        labelColor = MaterialTheme.colorScheme.onSurface,
-                        iconContentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                )
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SuggestionChip(
-                    onClick = onSetCoverClick,
-                    label = { Text(stringResource(R.string.cloud_person_set_cover)) },
-                    icon = {
-                        Icon(
-                            Icons.Outlined.Image,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    },
-                    colors = SuggestionChipDefaults.suggestionChipColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        labelColor = MaterialTheme.colorScheme.onSurface,
-                        iconContentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                )
-                if (canMerge) {
-                    SuggestionChip(
-                        onClick = onMergeClick,
-                        label = { Text(stringResource(R.string.cloud_person_merge)) },
-                        icon = {
-                            Icon(
-                                Icons.Outlined.Merge,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        },
-                        colors = SuggestionChipDefaults.suggestionChipColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                            labelColor = MaterialTheme.colorScheme.onSurface,
-                            iconContentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Icons.Outlined.Person, null,
+                        modifier = Modifier.size(56.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
-            if (blurProgress != null) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = stringResource(
-                        R.string.cloud_person_blurring_progress,
-                        blurProgress.first,
-                        blurProgress.second
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+            if (isLocalPerson) {
+                Box(
+                    modifier = Modifier
+                        .size(30.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primaryContainer)
+                        .clickable(onClick = onSetCoverClick),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Outlined.Image,
+                        contentDescription = stringResource(R.string.cloud_person_set_cover),
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Name — prominent, tappable to rename.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier
+                .clip(MaterialTheme.shapes.small)
+                .clickable(onClick = onRenameClick)
+                .padding(horizontal = 8.dp, vertical = 2.dp)
+        ) {
+            Text(
+                text = state.person?.name?.ifBlank { stringResource(R.string.cloud_person_add_name) }
+                    ?: stringResource(R.string.cloud_person_add_name),
+                style = MaterialTheme.typography.headlineSmall
+            )
+            Icon(
+                Icons.Outlined.Edit,
+                contentDescription = stringResource(R.string.cloud_person_edit_name),
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(modifier = Modifier.height(2.dp))
+
+        // Stats line — "14 photos · Mar 2021 – Jan 2026".
+        if (photoCount > 0) {
+            val countText = stringResource(R.string.cloud_person_photo_count, photoCount)
+            Text(
+                text = when {
+                    dateRange == null -> countText
+                    dateRange.first == dateRange.second ->
+                        stringResource(R.string.person_stats_single, countText, dateRange.first)
+                    else -> stringResource(
+                        R.string.person_stats_range,
+                        countText, dateRange.first, dateRange.second
+                    )
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // One scrolling row of actions — no more stacked chip rows.
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            item {
+                PersonActionChip(
+                    onClick = onBirthdayClick,
+                    icon = Icons.Outlined.Cake,
+                    label = state.person?.birthDate?.let { formatBirthDateDisplay(it) }
+                        ?: stringResource(R.string.cloud_person_add_birthday)
+                )
+            }
+            if (isLocalPerson) {
+                item {
+                    PersonActionChip(
+                        onClick = onSetCoverClick,
+                        icon = Icons.Outlined.Image,
+                        label = stringResource(R.string.cloud_person_set_cover)
+                    )
+                }
+                if (canMerge) {
+                    item {
+                        PersonActionChip(
+                            onClick = onMergeClick,
+                            icon = Icons.Outlined.Merge,
+                            label = stringResource(R.string.cloud_person_merge)
+                        )
+                    }
+                }
+                item {
+                    PersonActionChip(
+                        onClick = onHideClick,
+                        icon = Icons.Outlined.VisibilityOff,
+                        label = stringResource(R.string.cloud_person_hide)
+                    )
+                }
+                item {
+                    PersonActionChip(
+                        onClick = onBlurEverywhereClick,
+                        icon = Icons.Outlined.BlurOn,
+                        label = stringResource(R.string.cloud_person_blur_everywhere)
+                    )
+                }
+            }
+        }
+        if (blurProgress != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = stringResource(
+                    R.string.cloud_person_blurring_progress,
+                    blurProgress.first,
+                    blurProgress.second
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/**
+ * Horizontal strip of the person's actual detected faces — cluster purity at a
+ * glance. Long-press a face to remove it (durable EXCLUDE link).
+ */
+@OptIn(ExperimentalGlideComposeApi::class, ExperimentalFoundationApi::class)
+@Composable
+private fun PersonFaceStrip(
+    faces: List<FaceCropItem>,
+    onRemoveFace: (FaceCropItem) -> Unit
+) {
+    if (faces.isEmpty()) return
+    var confirmRemoval by remember { mutableStateOf<FaceCropItem?>(null) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = stringResource(R.string.person_faces_section),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(horizontal = 24.dp)
+        )
+        Text(
+            text = stringResource(R.string.person_faces_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 24.dp)
+        )
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(faces, key = { it.faceId }) { face ->
+                GlideImage(
+                    model = face.imageUri.toUri(),
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(72.dp)
+                        .clip(MaterialTheme.shapes.medium)
+                        .combinedClickable(
+                            onClick = {},
+                            onLongClick = { confirmRemoval = face }
+                        ),
+                    contentScale = ContentScale.Crop
                 )
             }
         }
+    }
+
+    confirmRemoval?.let { face ->
+        AlertDialog(
+            onDismissRequest = { confirmRemoval = null },
+            title = { Text(stringResource(R.string.person_face_remove)) },
+            text = { Text(stringResource(R.string.person_face_remove_confirm)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmRemoval = null
+                    onRemoveFace(face)
+                }) {
+                    Text(stringResource(R.string.cloud_person_remove_media_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRemoval = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+}
+
+/**
+ * "Looks similar to" row — people the clusterer thinks might be the same person.
+ * Tapping asks for a merge confirmation; confirming merges them into the
+ * currently open person (keeping this identity).
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SimilarPeopleRow(
+    people: List<PersonInfo>,
+    currentName: String,
+    onMerge: (PersonInfo) -> Unit
+) {
+    if (people.isEmpty()) return
+    var confirmMerge by remember { mutableStateOf<PersonInfo?>(null) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = stringResource(R.string.person_similar_people),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(horizontal = 24.dp)
+        )
+        Text(
+            text = stringResource(R.string.person_similar_hint, currentName),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 24.dp)
+        )
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            items(people, key = { it.accountKey }) { other ->
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.combinedClickable(
+                        onClick = { confirmMerge = other }
+                    )
+                ) {
+                    PersonAvatar(person = other, size = 64.dp)
+                    Text(
+                        text = other.name.ifBlank { stringResource(R.string.cloud_people_unknown) },
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1
+                    )
+                }
+            }
+        }
+    }
+
+    confirmMerge?.let { other ->
+        val otherName = other.name.ifBlank { stringResource(R.string.cloud_people_unknown) }
+        AlertDialog(
+            onDismissRequest = { confirmMerge = null },
+            title = { Text(stringResource(R.string.cloud_person_merge)) },
+            text = {
+                Text(stringResource(R.string.people_merge_into_confirm, otherName, currentName))
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmMerge = null
+                    onMerge(other)
+                }) {
+                    Text(stringResource(R.string.cloud_person_merge))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmMerge = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
     }
 }

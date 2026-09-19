@@ -8,8 +8,15 @@ package com.dot.gallery.cloud.data
 import androidx.room.TypeConverter
 import com.dot.gallery.cloud.core.ProviderType
 import com.dot.gallery.cloud.core.SyncState
+import com.dot.gallery.cloud.data.entity.FaceLinkKind
 
 object CloudConverters {
+    @TypeConverter
+    fun fromFaceLinkKind(value: FaceLinkKind): String = value.storedValue
+
+    @TypeConverter
+    fun toFaceLinkKind(value: String): FaceLinkKind = FaceLinkKind.fromStored(value)
+
     @TypeConverter
     fun fromProviderType(value: ProviderType): String = value.name
 

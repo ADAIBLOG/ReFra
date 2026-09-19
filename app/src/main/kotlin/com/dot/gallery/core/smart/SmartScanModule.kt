@@ -40,4 +40,8 @@ object SmartScanModule {
     @Provides
     @IntoSet
     fun provideFaceIndexProcessor(processor: FaceIndexPhaseProcessor): SmartScanPhaseProcessor = processor
+
+    @Provides
+    @IntoSet
+    fun provideFaceClusterProcessor(processor: FaceClusterPhaseProcessor): SmartScanPhaseProcessor = processor
 }

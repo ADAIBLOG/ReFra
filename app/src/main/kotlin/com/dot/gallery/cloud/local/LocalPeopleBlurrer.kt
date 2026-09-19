@@ -27,7 +27,7 @@ import javax.inject.Singleton
 /**
  * Batch operation that obscures a given person's face in every photo they appear in and saves the
  * results as new copies (non-destructive). Reuses the face boxes already stored by the
- * [com.dot.gallery.core.workers.FaceIndexerWorker], so no re-detection is needed.
+ * SmartScan FACE_INDEX phase, so no re-detection is needed.
  */
 @Singleton
 class LocalPeopleBlurrer @Inject constructor(

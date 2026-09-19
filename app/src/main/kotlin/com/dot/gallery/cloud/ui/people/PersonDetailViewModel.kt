@@ -11,6 +11,7 @@ import androidx.lifecycle.viewModelScope
 import com.dot.gallery.cloud.core.PersonInfo
 import com.dot.gallery.cloud.core.ProviderRegistry
 import com.dot.gallery.cloud.data.repository.CloudRepository
+import com.dot.gallery.cloud.local.FaceCropLoader
 import com.dot.gallery.core.Constants
 import com.dot.gallery.core.Resource
 import com.dot.gallery.feature_node.domain.model.Media
@@ -18,6 +19,7 @@ import com.dot.gallery.feature_node.domain.model.MediaState
 import com.dot.gallery.feature_node.domain.util.getUri
 import com.dot.gallery.feature_node.presentation.util.mapMediaToItem
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,12 +33,20 @@ data class PersonDetailUiState(
     val error: String? = null
 )
 
+/** A detected face crop shown in the detail screen's face strip. */
+data class FaceCropItem(
+    val faceId: Long,
+    val mediaId: Long,
+    val imageUri: String
+)
+
 @HiltViewModel
 class PersonDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repository: CloudRepository,
     private val registry: ProviderRegistry,
-    private val blurrer: com.dot.gallery.cloud.local.LocalPeopleBlurrer
+    private val blurrer: com.dot.gallery.cloud.local.LocalPeopleBlurrer,
+    private val faceCropLoader: FaceCropLoader
 ) : ViewModel() {
 
     private val personId: String = savedStateHandle["personId"] ?: ""
@@ -56,6 +66,14 @@ class PersonDetailViewModel @Inject constructor(
     private val _mergeCandidates = MutableStateFlow<List<PersonInfo>>(emptyList())
     val mergeCandidates: StateFlow<List<PersonInfo>> = _mergeCandidates.asStateFlow()
 
+    /** This person's detected face crops, best-confidence first — the purity strip. */
+    private val _personFaces = MutableStateFlow<List<FaceCropItem>>(emptyList())
+    val personFaces: StateFlow<List<FaceCropItem>> = _personFaces.asStateFlow()
+
+    /** Local people the clusterer finds similar to this person — merge shortcuts. */
+    private val _similarPeople = MutableStateFlow<List<PersonInfo>>(emptyList())
+    val similarPeople: StateFlow<List<PersonInfo>> = _similarPeople.asStateFlow()
+
     /** Raw media of this person, used to pick a new cover face. */
     private val _personMedia = MutableStateFlow<List<Media.UriMedia>>(emptyList())
     val personMedia: StateFlow<List<Media.UriMedia>> = _personMedia.asStateFlow()
@@ -67,6 +85,17 @@ class PersonDetailViewModel @Inject constructor(
             localProvider()?.setCover(id, media.id, uri)
             _uiState.value = _uiState.value.copy(
                 person = _uiState.value.person?.copy(thumbnailUrl = uri)
+            )
+        }
+    }
+
+    /** Set the person's cover to a detected face crop — tighter than a full photo. */
+    fun setCoverFace(face: FaceCropItem) {
+        val id = _uiState.value.person?.id ?: return
+        viewModelScope.launch {
+            localProvider()?.setCover(id, face.mediaId, face.imageUri)
+            _uiState.value = _uiState.value.copy(
+                person = _uiState.value.person?.copy(thumbnailUrl = face.imageUri)
             )
         }
     }
@@ -90,6 +119,25 @@ class PersonDetailViewModel @Inject constructor(
         val sourceId = _uiState.value.person?.id ?: return
         if (sourceId == targetPersonId) return
         viewModelScope.launch { localProvider()?.mergePeople(sourceId, targetPersonId) }
+    }
+
+    /** Merge a look-alike person INTO the current one — the current identity is kept. */
+    fun mergeSimilarIntoCurrent(otherPersonId: String) {
+        val targetId = _uiState.value.person?.id ?: return
+        if (targetId == otherPersonId) return
+        viewModelScope.launch { localProvider()?.mergePeople(otherPersonId, targetId) }
+    }
+
+    /**
+     * Remove a single detected face ("this is not me"): writes a durable EXCLUDE
+     * link so the batch clusterer keeps the face out on the next re-group.
+     */
+    fun removeFace(faceId: Long, onPersonGone: () -> Unit) {
+        val id = _uiState.value.person?.id ?: return
+        viewModelScope.launch {
+            val stillExists = localProvider()?.removeFacesFromPerson(id, listOf(faceId)) ?: true
+            if (!stillExists) onPersonGone()
+        }
     }
 
     /**
@@ -121,6 +169,28 @@ class PersonDetailViewModel @Inject constructor(
 
     init {
         loadPerson()
+        if (personId.isNotBlank() && configId != Long.MIN_VALUE) {
+            viewModelScope.launch(Dispatchers.IO) {
+                localProvider()?.observePersonFaces(personId)?.collect { faces ->
+                    val mediaIdByFace = faces.associate { it.id to it.mediaId }
+                    _personFaces.value = faceCropLoader.faceCrops(faces)
+                        .mapNotNull { (faceId, uri) ->
+                            mediaIdByFace[faceId]?.let { FaceCropItem(faceId, it, uri) }
+                        }
+                }
+            }
+            viewModelScope.launch {
+                localProvider()?.observeMergeSuggestions()?.collect { suggestions ->
+                    _similarPeople.value = suggestions.mapNotNull { s ->
+                        when {
+                            s.first.id == personId -> s.second
+                            s.second.id == personId -> s.first
+                            else -> null
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private fun loadPerson() {

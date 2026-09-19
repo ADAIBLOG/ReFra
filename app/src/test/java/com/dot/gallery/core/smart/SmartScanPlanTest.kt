@@ -39,12 +39,12 @@ class SmartScanPlanTest {
             listOf(
                 listOf(SmartScanPhase.METADATA),
                 listOf(SmartScanPhase.SEARCH_INDEX, SmartScanPhase.CATEGORY_CLASSIFICATION),
-                listOf(SmartScanPhase.FACE_INDEX)
+                listOf(SmartScanPhase.FACE_INDEX, SmartScanPhase.FACE_CLUSTER)
             ),
             SmartScanPlan.executionBranches(SmartScanFeature.ALL_MASK)
         )
         assertEquals(
-            listOf(listOf(SmartScanPhase.FACE_INDEX)),
+            listOf(listOf(SmartScanPhase.FACE_INDEX, SmartScanPhase.FACE_CLUSTER)),
             SmartScanPlan.executionBranches(SmartScanFeature.PERSONS.bit)
         )
     }

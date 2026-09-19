@@ -142,10 +142,18 @@ class FaceHelper(private val modelManager: ModelManager) {
      */
     fun embed(bitmap: Bitmap, rect: RectF): FloatArray? {
         if (!isRecognitionAvailable) return null
-        val left = (rect.left * bitmap.width).toInt().coerceIn(0, bitmap.width - 1)
-        val top = (rect.top * bitmap.height).toInt().coerceIn(0, bitmap.height - 1)
-        val right = (rect.right * bitmap.width).toInt().coerceIn(left + 1, bitmap.width)
-        val bottom = (rect.bottom * bitmap.height).toInt().coerceIn(top + 1, bitmap.height)
+        // ArcFace is trained on loose aligned crops, not tight detector boxes —
+        // expand the box so the crop includes the full head, then embed that.
+        val faceW = (rect.right - rect.left) * bitmap.width
+        val faceH = (rect.bottom - rect.top) * bitmap.height
+        val marginX = faceW * EMBED_MARGIN
+        val marginY = faceH * EMBED_MARGIN
+        val cx = (rect.left + rect.right) / 2f * bitmap.width
+        val cy = (rect.top + rect.bottom) / 2f * bitmap.height
+        val left = (cx - faceW / 2f - marginX).toInt().coerceIn(0, bitmap.width - 1)
+        val top = (cy - faceH / 2f - marginY).toInt().coerceIn(0, bitmap.height - 1)
+        val right = (cx + faceW / 2f + marginX).toInt().coerceIn(left + 1, bitmap.width)
+        val bottom = (cy + faceH / 2f + marginY).toInt().coerceIn(top + 1, bitmap.height)
         val w = right - left
         val h = bottom - top
         if (w < 2 || h < 2) return null
@@ -194,6 +202,8 @@ class FaceHelper(private val modelManager: ModelManager) {
         private const val INPUT_W = 320
         private const val INPUT_H = 240
         private const val RECOG_SIZE = 112
+        /** Fraction of the face box added on every side before recognition. */
+        private const val EMBED_MARGIN = 0.20f
 
         fun l2Normalize(v: FloatArray): FloatArray {
             var sum = 0f

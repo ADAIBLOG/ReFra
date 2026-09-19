@@ -14,6 +14,8 @@ import androidx.room.Upsert
 import com.dot.gallery.cloud.data.entity.DetectedFaceEntity
 import com.dot.gallery.cloud.data.entity.FaceClusterEntity
 import com.dot.gallery.cloud.data.entity.FaceExclusionEntity
+import com.dot.gallery.cloud.data.entity.FaceLinkEntity
+import com.dot.gallery.cloud.data.entity.FaceLinkKind
 import kotlinx.coroutines.flow.Flow
 
 data class DetectedFaceHeader(
@@ -25,6 +27,11 @@ data class DetectedFaceHeader(
 data class DetectedFacePersonCount(
     val personId: String,
     val faceCount: Int
+)
+
+data class DetectedFacePhotoCount(
+    val personId: String,
+    val photoCount: Int
 )
 
 @Dao
@@ -63,8 +70,20 @@ interface DetectedFaceDao {
     @Query("SELECT * FROM face_clusters")
     suspend fun getClusters(): List<FaceClusterEntity>
 
+    @Query("SELECT * FROM face_clusters")
+    fun observeClusters(): Flow<List<FaceClusterEntity>>
+
     @Query("SELECT personId, COUNT(*) AS faceCount FROM detected_faces WHERE personId IS NOT NULL GROUP BY personId")
     suspend fun getPersonCounts(): List<DetectedFacePersonCount>
+
+    @Query("SELECT personId, COUNT(DISTINCT mediaId) AS photoCount FROM detected_faces WHERE personId IS NOT NULL GROUP BY personId")
+    fun observePersonPhotoCounts(): Flow<List<DetectedFacePhotoCount>>
+
+    @Query("SELECT COUNT(DISTINCT mediaId) FROM detected_faces WHERE personId IS NOT NULL")
+    fun observeIndexedPhotoCount(): Flow<Int>
+
+    @Query("SELECT COUNT(DISTINCT mediaId) FROM detected_faces WHERE personId = :personId")
+    suspend fun countMediaForPerson(personId: String): Int
 
     @Upsert
     suspend fun upsertClusters(clusters: List<FaceClusterEntity>)
@@ -92,6 +111,12 @@ interface DetectedFaceDao {
 
     @Query("UPDATE detected_faces SET personId = :personId WHERE id = :faceId")
     suspend fun assignFace(faceId: Long, personId: String?)
+
+    @Query("UPDATE detected_faces SET personId = :personId WHERE id IN (:faceIds)")
+    suspend fun assignFaces(faceIds: List<Long>, personId: String?)
+
+    @Query("SELECT * FROM detected_faces WHERE personId = :personId")
+    suspend fun getByPersonOnce(personId: String): List<DetectedFaceEntity>
 
     @Query("UPDATE detected_faces SET personId = NULL WHERE personId = :personId AND mediaId IN (:mediaIds)")
     suspend fun unassignPersonMedia(personId: String, mediaIds: List<Long>): Int
@@ -140,4 +165,33 @@ interface DetectedFaceDao {
         """
     )
     suspend fun deleteOrphanExclusions(): Int
+
+    // ── Face links (durable user assertions feeding batch clustering) ──
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertLinks(links: List<FaceLinkEntity>)
+
+    @Query("SELECT * FROM face_links")
+    suspend fun getLinks(): List<FaceLinkEntity>
+
+    @Query("SELECT * FROM face_links")
+    fun observeLinks(): Flow<List<FaceLinkEntity>>
+
+    @Query("DELETE FROM face_links WHERE id IN (:ids)")
+    suspend fun deleteLinksByIds(ids: List<Long>)
+
+    @Query("UPDATE face_links SET personId = :targetId WHERE personId = :sourceId AND kind = :kind")
+    suspend fun reassignLinks(sourceId: String, targetId: String, kind: FaceLinkKind)
+
+    @Query("DELETE FROM face_links WHERE personId = :personId")
+    suspend fun deleteLinksForPerson(personId: String)
+
+    @Query(
+        """
+        DELETE FROM face_links
+        WHERE NOT EXISTS (SELECT 1 FROM media WHERE media.id = face_links.mediaId)
+          AND NOT EXISTS (SELECT 1 FROM cloud_media WHERE cloud_media.globalMediaId = face_links.mediaId)
+        """
+    )
+    suspend fun deleteOrphanLinks(): Int
 }

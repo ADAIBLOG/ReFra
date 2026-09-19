@@ -47,7 +47,8 @@ enum class SmartScanPhase(val storedValue: String) {
     METADATA("metadata"),
     SEARCH_INDEX("search_index"),
     CATEGORY_CLASSIFICATION("category_classification"),
-    FACE_INDEX("face_index")
+    FACE_INDEX("face_index"),
+    FACE_CLUSTER("face_cluster")
 }
 
 enum class MediaFeature(val storedValue: String) {

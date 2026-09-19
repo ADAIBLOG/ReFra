@@ -25,8 +25,6 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.MovieCreation
-import androidx.compose.material.icons.outlined.Person
-import androidx.compose.material.icons.outlined.PersonRemove
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Wallpaper
@@ -38,7 +36,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -50,7 +47,6 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -58,12 +54,10 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dot.gallery.R
 import com.dot.gallery.cloud.core.CloudRuntimeSettings
-import com.dot.gallery.cloud.core.PersonInfo
 import com.dot.gallery.cloud.ui.CloudSelectionViewModel
 import com.dot.gallery.core.LocalMediaHandler
 import com.dot.gallery.core.Settings
 import com.dot.gallery.feature_node.presentation.mediaview.LocalMediaViewerVisualPolicy
-import com.dot.gallery.feature_node.presentation.mediaview.MediaViewViewModel
 import com.dot.gallery.feature_node.presentation.mediaview.viewerActionCapabilities
 import com.dot.gallery.core.util.SdkCompat
 import com.dot.gallery.feature_node.data.data_source.KeychainHolder
@@ -125,17 +119,7 @@ fun <T : Media> MediaViewSheetActions(
     val copySheetState = rememberAppBottomSheetState()
     val moveSheetState = rememberAppBottomSheetState()
     val useAsSheetState = rememberAppBottomSheetState()
-    val peopleSheetState = rememberAppBottomSheetState()
-    val removePersonConfirmState = rememberAppBottomSheetState()
     var showCollectionSheet by rememberSaveable { mutableStateOf(false) }
-    var pendingPerson by remember { mutableStateOf<PersonInfo?>(null) }
-
-    // On-device persons whose faces were detected in this media — emitted live so the
-    // "Remove from person" action and its review sheet stay in sync with removals.
-    val mediaViewViewModel = hiltViewModel<MediaViewViewModel>()
-    val mediaPeople by produceState<List<PersonInfo>>(emptyList(), media.id) {
-        mediaViewViewModel.peopleForMedia(media.id).collect { value = it }
-    }
 
     val defaultEditor by Settings.Misc.rememberDefaultImageEditor()
 
@@ -163,9 +147,6 @@ fun <T : Media> MediaViewSheetActions(
     val exportFailedText = stringResource(R.string.motion_photo_export_failed)
     val extractFramesText = stringResource(R.string.frame_picker_extract_frames)
     val createFirstText = stringResource(R.string.vault_create_first)
-    val removeFromPersonText = stringResource(R.string.cloud_person_remove_media)
-    val unknownPersonText = stringResource(R.string.cloud_people_unknown)
-    val personPhotoCountFormat = stringResource(R.string.cloud_person_photo_count)
     val handler = LocalMediaHandler.current
     val cloudSelectionViewModel = hiltViewModel<CloudSelectionViewModel>()
     val cloudSettingsByConfigId by CloudRuntimeSettings.settingsByConfigId.collectAsStateWithLifecycle()
@@ -222,21 +203,6 @@ fun <T : Media> MediaViewSheetActions(
         ).toMutableStateList()
     }
 
-    // Review list for "Remove from person": one row per detected person in this media.
-    val peopleOptions = remember(mediaPeople, unknownPersonText, personPhotoCountFormat) {
-        mediaPeople.map { person ->
-            OptionItem(
-                icon = Icons.Outlined.Person,
-                text = person.name.ifBlank { unknownPersonText },
-                summary = personPhotoCountFormat.format(person.assetCount),
-                onClick = {
-                    pendingPerson = person
-                    scope.launch { removePersonConfirmState.show() }
-                }
-            )
-        }.toMutableStateList()
-    }
-
     // Build action list
     val actions = remember(
         media,
@@ -266,8 +232,6 @@ fun <T : Media> MediaViewSheetActions(
         exportFailedText,
         extractFramesText,
         createFirstText,
-        removeFromPersonText,
-        mediaPeople,
         onOpenFramePicker,
     ) {
         buildList<ActionGridItem> {
@@ -408,15 +372,6 @@ fun <T : Media> MediaViewSheetActions(
                     icon = Icons.Outlined.Collections,
                     text = addToCollectionText,
                     onClick = { showCollectionSheet = true }
-                ))
-            }
-            // Remove from person — offered while any detected face in this media is
-            // assigned to an on-device person.
-            if (mediaPeople.isNotEmpty()) {
-                add(ActionGridItem(
-                    icon = Icons.Outlined.PersonRemove,
-                    text = removeFromPersonText,
-                    onClick = { scope.launch { peopleSheetState.show() } }
                 ))
             }
             // Download (cloud only)
@@ -599,42 +554,6 @@ fun <T : Media> MediaViewSheetActions(
         )
     }
 
-    // "Remove from person" review sheet: lists the on-device persons this media is
-    // counted as; picking one asks for confirmation before un-assigning the face.
-    if (mediaPeople.isNotEmpty() || peopleSheetState.isVisible) {
-        OptionSheet(
-            state = peopleSheetState,
-            optionList = arrayOf(peopleOptions),
-            headerContent = {
-                Text(
-                    text = stringResource(R.string.cloud_person_media_people_header),
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.padding(16.dp)
-                )
-            }
-        )
-    }
-    pendingPerson?.let { person ->
-        ConfirmationSheet(
-            state = removePersonConfirmState,
-            title = pluralStringResource(
-                R.plurals.cloud_person_remove_media_title,
-                1,
-                1,
-                person.name.ifBlank { unknownPersonText }
-            ),
-            summary = stringResource(R.string.cloud_person_remove_media_summary),
-            confirmText = stringResource(R.string.cloud_person_remove_media_confirm),
-            onConfirm = {
-                mediaViewViewModel.removeMediaFromPerson(person.id, media.id)
-                pendingPerson = null
-                scope.launch { removePersonConfirmState.hide() }
-            }
-        )
-    }
-    LaunchedEffect(mediaPeople) {
-        if (mediaPeople.isEmpty() && peopleSheetState.isVisible) peopleSheetState.hide()
-    }
 }
 
 private data class ActionGridItem(

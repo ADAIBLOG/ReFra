@@ -47,7 +47,8 @@ object SmartScanPlan {
         SmartScanPhase.METADATA,
         SmartScanPhase.SEARCH_INDEX,
         SmartScanPhase.CATEGORY_CLASSIFICATION,
-        SmartScanPhase.FACE_INDEX
+        SmartScanPhase.FACE_INDEX,
+        SmartScanPhase.FACE_CLUSTER
     )
 
     fun expandedFeatures(features: Int): Int = SmartScanFeature.expandDependencies(features)
@@ -61,7 +62,10 @@ object SmartScanPlan {
             if (expanded and SmartScanFeature.METADATA.bit != 0) add(SmartScanPhase.METADATA)
             if (expanded and SmartScanFeature.EMBEDDINGS.bit != 0) add(SmartScanPhase.SEARCH_INDEX)
             if (expanded and SmartScanFeature.CATEGORIES.bit != 0) add(SmartScanPhase.CATEGORY_CLASSIFICATION)
-            if (expanded and SmartScanFeature.PERSONS.bit != 0) add(SmartScanPhase.FACE_INDEX)
+            if (expanded and SmartScanFeature.PERSONS.bit != 0) {
+                add(SmartScanPhase.FACE_INDEX)
+                add(SmartScanPhase.FACE_CLUSTER)
+            }
         }
     }
 
@@ -73,7 +77,10 @@ object SmartScanPlan {
                 if (SmartScanPhase.SEARCH_INDEX in phases) add(SmartScanPhase.SEARCH_INDEX)
                 if (SmartScanPhase.CATEGORY_CLASSIFICATION in phases) add(SmartScanPhase.CATEGORY_CLASSIFICATION)
             }.takeIf { it.isNotEmpty() },
-            listOf(SmartScanPhase.FACE_INDEX).takeIf { SmartScanPhase.FACE_INDEX in phases }
+            buildList {
+                if (SmartScanPhase.FACE_INDEX in phases) add(SmartScanPhase.FACE_INDEX)
+                if (SmartScanPhase.FACE_CLUSTER in phases) add(SmartScanPhase.FACE_CLUSTER)
+            }.takeIf { it.isNotEmpty() }
         )
     }
 

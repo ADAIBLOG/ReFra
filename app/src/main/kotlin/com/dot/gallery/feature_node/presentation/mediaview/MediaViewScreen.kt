@@ -148,6 +148,7 @@ import com.dot.gallery.core.Settings.Misc.rememberVideoAutoplay
 import com.dot.gallery.core.decoder.format.ImageReencoder
 import com.dot.gallery.core.metadata.MetadataRemovalMode
 import com.dot.gallery.core.metadata.MetadataSaveMode
+import com.dot.gallery.core.navigate
 import com.dot.gallery.core.navigateUp
 import com.dot.gallery.core.presentation.components.DragHandle
 import com.dot.gallery.core.presentation.components.OverwriteFallbackSheet
@@ -198,6 +199,7 @@ import com.dot.gallery.feature_node.presentation.util.FullBrightnessWindow
 import com.dot.gallery.feature_node.presentation.util.LocalHazeState
 import com.dot.gallery.feature_node.presentation.util.MediaSharedElementKey
 import com.dot.gallery.feature_node.presentation.util.ProvideInsets
+import com.dot.gallery.feature_node.presentation.util.Screen
 import com.dot.gallery.feature_node.presentation.util.ViewScreenConstants.BOTTOM_BAR_HEIGHT
 import com.dot.gallery.feature_node.presentation.util.ViewScreenConstants.ImageOnly
 import com.dot.gallery.feature_node.presentation.util.getMediaAppBarDate
@@ -2656,6 +2658,23 @@ fun <T : Media> MediaViewScreen(
                                 motionPhotoState = motionPhotoState,
                                 onOpenFramePicker = openFramePicker,
                                 cloudBackups = currentCloudBackups,
+                                onOpenPersonTimeline = { person ->
+                                    val route = Screen.PersonDetailScreen.personId(
+                                        configId = person.serverConfigId,
+                                        id = person.id
+                                    )
+                                    if (overlayMode) {
+                                        // The viewer sits above the NavHost — push the person
+                                        // screen underneath, then dismiss the overlay to reveal it.
+                                        eventHandler.navigate(route)
+                                        dismissViewer()
+                                    } else {
+                                        // Standalone destination — pop the viewer first so the
+                                        // back stack doesn't keep a hidden viewer entry.
+                                        dismissViewer()
+                                        eventHandler.navigate(route)
+                                    }
+                                },
                                 metadataSanitizationState = metadataSanitizationUiState,
                                 probeMetadataSanitization = probeMetadataSanitization,
                                 sanitizeMetadata = sanitizeMetadata,

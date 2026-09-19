@@ -405,6 +405,7 @@ class SmartScanWorker @AssistedInject constructor(
         SmartScanPhase.SEARCH_INDEX -> R.string.smart_scan_phase_search_index
         SmartScanPhase.CATEGORY_CLASSIFICATION -> R.string.smart_scan_phase_categories
         SmartScanPhase.FACE_INDEX -> R.string.smart_scan_phase_people
+        SmartScanPhase.FACE_CLUSTER -> R.string.smart_scan_phase_people_grouping
     }
 
     private fun resultFor(status: SmartScanStatus): Result = when (status) {

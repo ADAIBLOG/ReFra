@@ -114,6 +114,22 @@ class SmartScanScheduler @Inject constructor(
         fullRefresh = true
     )
 
+    /**
+     * Run only the grouping phase over already-indexed faces — no media re-scan.
+     * The run still reports the PERSONS feature so the dispatcher's branch plan
+     * accepts FACE_CLUSTER; every other planned phase is simply absent from the
+     * run's phase rows and is skipped.
+     */
+    suspend fun regroupFaces(): SmartScanScheduleResult = schedulingMutex.withLock {
+        scheduleLocked(
+            features = SmartScanFeature.PERSONS.bit,
+            trigger = SmartScanTrigger.MANUAL,
+            userVisible = true,
+            fullRefresh = false,
+            onlyPhases = setOf(SmartScanPhase.FACE_CLUSTER)
+        )
+    }
+
     suspend fun resumeActiveRun(): Boolean = schedulingMutex.withLock {
         val run = dao.getActiveRun() ?: return@withLock false
         val workId = run.workId?.let { runCatching { UUID.fromString(it) }.getOrNull() }
@@ -157,13 +173,15 @@ class SmartScanScheduler @Inject constructor(
         features: Int,
         trigger: SmartScanTrigger,
         userVisible: Boolean,
-        fullRefresh: Boolean
+        fullRefresh: Boolean,
+        onlyPhases: Set<SmartScanPhase>? = null
     ): SmartScanScheduleResult {
         require(features and SmartScanFeature.ALL_MASK != 0) { "At least one Smart Scan feature is required" }
         require(features and SmartScanFeature.ALL_MASK.inv() == 0) { "Unknown Smart Scan feature bits" }
 
         val expanded = SmartScanPlan.expandedFeatures(features)
         val plannedPhases = SmartScanPlan.phasesFor(expanded)
+            .filter { onlyPhases == null || it in onlyPhases }
         val previousActiveWorkId = dao.getActiveRun()?.workId
         val now = System.currentTimeMillis()
         val runId = UUID.randomUUID().toString()

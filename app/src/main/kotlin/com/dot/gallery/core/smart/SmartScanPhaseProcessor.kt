@@ -836,26 +836,24 @@ internal fun isCurrentFaceDetection(
     state.sourceRevision == sourceRevision && state.resultRevision == resultRevision &&
     (headers.isEmpty() || headers.all { it.timestamp == timestamp && it.resultRevision == resultRevision })
 
+/**
+ * Detects and embeds faces per media, storing rows in `detected_faces` with
+ * `personId = null`. Grouping is NOT done here — [FaceClusterPhaseProcessor]
+ * rebuilds all person assignments as a deterministic batch afterwards, so this
+ * phase stays incremental and order-independent.
+ */
 class FaceIndexPhaseProcessor @Inject constructor(
     repository: MediaRepository,
     database: InternalDatabase,
     private val modelManager: ModelManager,
     private val faceDao: DetectedFaceDao,
-    private val personDao: PersonDao,
     private val thumbnailLoader: SmartThumbnailLoader,
     @ApplicationContext private val appContext: Context
 ) : MediaPhaseProcessor(repository, database) {
     override val phase = SmartScanPhase.FACE_INDEX
     override val revision: String
-        get() = "face-v2:${modelManager.processorRevision(ModelGroup.FACE_DETECT)}:" +
+        get() = "face-v3:${modelManager.processorRevision(ModelGroup.FACE_DETECT)}:" +
             modelManager.processorRevision(ModelGroup.FACE_RECOGNITION)
-
-    private data class Cluster(
-        val personId: String,
-        var centroid: FloatArray,
-        var normalizedCentroid: FloatArray,
-        var count: Int
-    )
 
     override suspend fun process(context: SmartScanPhaseContext): SmartScanPhaseResult {
         if (!BuildConfig.ENABLE_INDEXING) return SmartScanPhaseResult.Blocked("indexing_disabled")
@@ -863,13 +861,9 @@ class FaceIndexPhaseProcessor @Inject constructor(
             !modelManager.isReady(ModelGroup.FACE_RECOGNITION)
         ) return SmartScanPhaseResult.Blocked("face_model_unavailable")
         val scanDao = database.getSmartScanDao()
-        val orphanPeople = faceDao.getOrphanPersonIds()
-        val removedOrphans = faceDao.deleteOrphans()
+        faceDao.deleteOrphans()
         faceDao.deleteOrphanExclusions()
-        val exclusionsByMedia = faceDao.getExclusions()
-            .groupBy({ it.mediaId }) { it.personId }
-            .mapValues { it.value.toHashSet() }
-        val touchedPeople = orphanPeople.toHashSet()
+        faceDao.deleteOrphanLinks()
         val now = System.currentTimeMillis()
         val states = scanDao.getFeatureStates(MediaFeature.FACE_DETECTION).associateBy { it.mediaId }
         val headers = faceDao.getHeaders().groupBy { it.mediaId }
@@ -900,7 +894,6 @@ class FaceIndexPhaseProcessor @Inject constructor(
                     emptyList()
                 }
                 if (!context.fullRefresh && canAdoptExistingFaceResults(existing, item.timestamp, revision)) {
-                    existing.mapNotNullTo(touchedPeople) { it.personId }
                     database.withTransaction {
                         check(faceDao.updateResultRevision(item.id, revision) == existing.size)
                         scanDao.upsertFeatureState(
@@ -942,11 +935,7 @@ class FaceIndexPhaseProcessor @Inject constructor(
             }
         }
         if (statesToPersist.isNotEmpty()) scanDao.upsertFeatureStates(statesToPersist)
-        if (candidates.isEmpty()) {
-            if (removedOrphans > 0) persistClusters(buildInitialClusters(forceRebuild = true), touchedPeople)
-            return SmartScanPhaseResult.Completed(SmartScanProgress.EMPTY)
-        }
-        val clusters = buildInitialClusters(forceRebuild = removedOrphans > 0)
+        if (candidates.isEmpty()) return SmartScanPhaseResult.Completed(SmartScanProgress.EMPTY)
         var succeeded = 0
         var skipped = 0
         var failed = 0
@@ -970,36 +959,19 @@ class FaceIndexPhaseProcessor @Inject constructor(
                     progress(context, candidates.size, index + 1, succeeded, skipped, failed)
                     return@forEachIndexed
                 }
-                val clusterSnapshot = clusters.mapTo(mutableListOf()) {
-                    it.copy(centroid = it.centroid.copyOf(), normalizedCentroid = it.normalizedCentroid.copyOf())
-                }
                 val result = runCatching {
                     val bitmap = thumbnailLoader.load(item, 640) ?: error("decode_failed")
                     try {
                         val faces = helper.detect(bitmap)
-                        val embeddedFaces = faces.map { face ->
-                            val embedding = requireNotNull(helper.embed(bitmap, face.rectF))
-                            check(isValidEmbeddingVector(embedding, FACE_EMBEDDING_DIMENSION))
-                            face to embedding
-                        }
-                        val existingFaces = faceDao.getByMedia(item.id)
-                        existingFaces.mapNotNullTo(touchedPeople) { it.personId }
-                        removeFromClusters(existingFaces, clusters)
-                        val detected = if (embeddedFaces.isEmpty()) {
+                        val detected = if (faces.isEmpty()) {
                             listOf(DetectedFaceEntity(mediaId = item.id, timestamp = item.timestamp, resultRevision = revision))
                         } else {
-                            embeddedFaces.map { (face, embedding) ->
+                            faces.map { face ->
+                                val embedding = requireNotNull(helper.embed(bitmap, face.rectF))
+                                check(isValidEmbeddingVector(embedding, FACE_EMBEDDING_DIMENSION))
                                 DetectedFaceEntity(
                                     mediaId = item.id,
-                                    personId = assignCluster(
-                                        embedding,
-                                        clusters,
-                                        item,
-                                        face,
-                                        bitmap,
-                                        touchedPeople,
-                                        exclusionsByMedia[item.id].orEmpty()
-                                    ),
+                                    personId = null,
                                     embedding = FloatVectorCodec.encode(embedding),
                                     left = face.left,
                                     top = face.top,
@@ -1015,12 +987,6 @@ class FaceIndexPhaseProcessor @Inject constructor(
                         database.withTransaction {
                             faceDao.deleteByMedia(item.id)
                             faceDao.insertAll(detected)
-                            persistClusterRows(clusters, touchedPeople, completedAt)
-                            val itemPeople = existingFaces.mapNotNullTo(hashSetOf()) { it.personId }
-                            detected.mapNotNullTo(itemPeople) { it.personId }
-                            itemPeople.forEach { personId ->
-                                personDao.updateFaceCount(personId, faceDao.countForPerson(personId), completedAt)
-                            }
                             check(
                                 scanDao.finishFeature(
                                     item.id,
@@ -1037,11 +1003,6 @@ class FaceIndexPhaseProcessor @Inject constructor(
                     }
                 }
                 if (result.isSuccess) succeeded++ else {
-                    val previousPeople = clusterSnapshot.mapTo(hashSetOf()) { it.personId }
-                    val newPeople = clusters.mapNotNullTo(hashSetOf()) { it.personId.takeIf { id -> id !in previousPeople } }
-                    withContext(NonCancellable) { deletePeople(newPeople) }
-                    clusters.clear()
-                    clusters.addAll(clusterSnapshot)
                     val error = result.exceptionOrNull()
                     if (error is CancellationException && error !is TimeoutCancellationException) throw error
                     scanDao.finishFeature(
@@ -1062,7 +1023,6 @@ class FaceIndexPhaseProcessor @Inject constructor(
         } finally {
             helper.close()
         }
-        persistClusters(clusters, touchedPeople)
         val summary = SmartScanProgress(candidates.size, candidates.size, succeeded, skipped, failed)
         return when {
             failed == candidates.size && candidates.isNotEmpty() ->
@@ -1070,162 +1030,5 @@ class FaceIndexPhaseProcessor @Inject constructor(
             failed > 0 -> SmartScanPhaseResult.Partial("face_index_partially_failed", summary)
             else -> SmartScanPhaseResult.Completed(summary)
         }
-    }
-
-    private suspend fun deletePeople(personIds: Set<String>) {
-        personIds.forEach { personId ->
-            personDao.getById(personId)?.thumbnailUrl?.let { value ->
-                runCatching { File(requireNotNull(value.toUri().path)).delete() }
-            }
-            personDao.deleteById(personId)
-        }
-    }
-
-    private suspend fun persistClusters(clusters: List<Cluster>, touchedPeople: Set<String>) {
-        val completedAt = System.currentTimeMillis()
-        database.withTransaction {
-            persistClusterRows(clusters, touchedPeople, completedAt)
-        }
-        touchedPeople.forEach { personId ->
-            personDao.updateFaceCount(personId, faceDao.countForPerson(personId), completedAt)
-        }
-    }
-
-    private suspend fun persistClusterRows(
-        clusters: List<Cluster>,
-        touchedPeople: Set<String>,
-        updatedAt: Long
-    ) {
-        val activeClusters = clusters.filter { it.count > 0 }.map {
-            FaceClusterEntity(it.personId, it.centroid, it.count, updatedAt)
-        }
-        if (activeClusters.isNotEmpty()) faceDao.upsertClusters(activeClusters)
-        val emptyClusterIds = touchedPeople - activeClusters.mapTo(hashSetOf()) { it.personId }
-        if (emptyClusterIds.isNotEmpty()) faceDao.deleteClusters(emptyClusterIds.toList())
-    }
-
-    private suspend fun buildInitialClusters(forceRebuild: Boolean): MutableList<Cluster> {
-        val persisted = faceDao.getClusters().filter {
-            it.faceCount > 0 && it.centroid.size == FACE_EMBEDDING_DIMENSION && it.centroid.all(Float::isFinite)
-        }
-        val personCounts = faceDao.getPersonCounts().associate { it.personId to it.faceCount }
-        val persistedCountsMatch = !forceRebuild && persisted.size == personCounts.size && persisted.all {
-            personCounts[it.personId] == it.faceCount
-        }
-        if (persistedCountsMatch && persisted.isNotEmpty()) {
-            return persisted.mapTo(mutableListOf()) {
-                Cluster(it.personId, it.centroid.copyOf(), FaceHelper.l2Normalize(it.centroid), it.faceCount)
-            }
-        }
-        val rebuilt = faceDao.getAll()
-            .filter { it.personId != null && it.embedding != null }
-            .groupBy { requireNotNull(it.personId) }
-            .mapNotNull { (personId, faces) ->
-                val vectors = faces.mapNotNull { face ->
-                    runCatching { FloatVectorCodec.decode(requireNotNull(face.embedding)) }.getOrNull()
-                        ?.takeIf { it.size == FACE_EMBEDDING_DIMENSION && it.all(Float::isFinite) }
-                }
-                if (vectors.isEmpty()) return@mapNotNull null
-                val sum = FloatArray(FACE_EMBEDDING_DIMENSION)
-                vectors.forEach { values ->
-                    values.indices.forEach { index -> sum[index] += values[index] }
-                }
-                val centroid = FloatArray(sum.size) { sum[it] / vectors.size }
-                Cluster(personId, centroid, FaceHelper.l2Normalize(centroid), vectors.size)
-            }.toMutableList()
-        if (rebuilt.isNotEmpty()) {
-            val now = System.currentTimeMillis()
-            faceDao.upsertClusters(rebuilt.map { FaceClusterEntity(it.personId, it.centroid, it.count, now) })
-        }
-        return rebuilt
-    }
-
-    private fun removeFromClusters(faces: List<DetectedFaceEntity>, clusters: List<Cluster>) {
-        faces.forEach { face ->
-            val personId = face.personId ?: return@forEach
-            val embedding = face.embedding?.let {
-                runCatching { FloatVectorCodec.decode(it) }.getOrNull()
-            }?.takeIf { it.size == FACE_EMBEDDING_DIMENSION && it.all(Float::isFinite) } ?: return@forEach
-            val cluster = clusters.firstOrNull { it.personId == personId } ?: return@forEach
-            if (cluster.count > 1) {
-                val newCount = cluster.count - 1
-                cluster.centroid = FloatArray(cluster.centroid.size) { index ->
-                    (cluster.centroid[index] * cluster.count - embedding[index]) / newCount
-                }
-                cluster.normalizedCentroid = FaceHelper.l2Normalize(cluster.centroid)
-            }
-            cluster.count = (cluster.count - 1).coerceAtLeast(0)
-        }
-    }
-
-    private suspend fun assignCluster(
-        embedding: FloatArray,
-        clusters: MutableList<Cluster>,
-        media: Media.UriMedia,
-        face: DetectedFaceBox,
-        bitmap: Bitmap,
-        touchedPeople: MutableSet<String>,
-        excludedPersonIds: Set<String> = emptySet()
-    ): String {
-        var best: Cluster? = null
-        var bestScore = Float.NEGATIVE_INFINITY
-        clusters.forEach { cluster ->
-            // The user asserted this media does not contain this person — never
-            // re-cluster the face back onto it.
-            if (cluster.personId in excludedPersonIds) return@forEach
-            val score = FaceHelper.cosine(embedding, cluster.normalizedCentroid)
-            if (score > bestScore) {
-                best = cluster
-                bestScore = score
-            }
-        }
-        best?.takeIf { bestScore >= CLUSTER_THRESHOLD }?.let { cluster ->
-            val newCount = cluster.count + 1
-            cluster.centroid = FloatArray(cluster.centroid.size) { index ->
-                (cluster.centroid[index] * cluster.count + embedding[index]) / newCount
-            }
-            cluster.normalizedCentroid = FaceHelper.l2Normalize(cluster.centroid)
-            cluster.count = newCount
-            touchedPeople += cluster.personId
-            return cluster.personId
-        }
-
-        val personId = "local_${UUID.randomUUID()}"
-        personDao.insert(
-            PersonEntity(
-                id = personId,
-                name = "",
-                providerType = ProviderType.LOCAL_PEOPLE,
-                thumbnailMediaId = media.id,
-                thumbnailUrl = saveFaceThumbnail(personId, bitmap, face),
-                faceCount = 1,
-                lastUpdated = System.currentTimeMillis()
-            )
-        )
-        clusters += Cluster(personId, embedding.copyOf(), embedding.copyOf(), 1)
-        touchedPeople += personId
-        return personId
-    }
-
-    private fun saveFaceThumbnail(
-        personId: String,
-        bitmap: Bitmap,
-        face: DetectedFaceBox
-    ): String? = runCatching {
-        val left = (face.left * bitmap.width).toInt().coerceIn(0, bitmap.width - 1)
-        val top = (face.top * bitmap.height).toInt().coerceIn(0, bitmap.height - 1)
-        val right = (face.right * bitmap.width).toInt().coerceIn(left + 1, bitmap.width)
-        val bottom = (face.bottom * bitmap.height).toInt().coerceIn(top + 1, bitmap.height)
-        val crop = Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
-        val directory = File(appContext.filesDir, FACE_THUMBNAIL_DIRECTORY).apply { mkdirs() }
-        val file = File(directory, "$personId.jpg")
-        file.outputStream().use { crop.compress(Bitmap.CompressFormat.JPEG, 90, it) }
-        if (crop != bitmap) crop.recycle()
-        file.toUri().toString()
-    }.getOrNull()
-
-    companion object {
-        private const val CLUSTER_THRESHOLD = 0.45f
-        private const val FACE_THUMBNAIL_DIRECTORY = "face_thumbs"
     }
 }

@@ -338,6 +338,7 @@ internal fun SmartScanPhase.label(): String = stringResource(
         SmartScanPhase.SEARCH_INDEX -> R.string.smart_scan_phase_search_index
         SmartScanPhase.CATEGORY_CLASSIFICATION -> R.string.smart_scan_phase_categories
         SmartScanPhase.FACE_INDEX -> R.string.smart_scan_phase_people
+        SmartScanPhase.FACE_CLUSTER -> R.string.smart_scan_phase_people_grouping
     }
 )
 

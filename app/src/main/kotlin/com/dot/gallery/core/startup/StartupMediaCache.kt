@@ -17,7 +17,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.dot.gallery.core.encryption.EncryptedPreferencesSerializer
 import com.dot.gallery.core.metrics.StartupTracer
-import com.dot.gallery.core.workers.FaceIndexerWorker
+import com.dot.gallery.core.smart.FaceClusterPhaseProcessor
 import com.dot.gallery.feature_node.domain.model.Album
 import com.dot.gallery.feature_node.domain.model.Media
 import com.dot.gallery.feature_node.presentation.library.CachedLibrarySnapshot
@@ -258,8 +258,8 @@ class StartupMediaCache internal constructor(
         )
     }
 
-    private val faceThumbDir: String = File(context.filesDir, FaceIndexerWorker.THUMB_DIR)
-        .absolutePath
+    private val faceThumbDir: String =
+        File(context.filesDir, FaceClusterPhaseProcessor.FACE_THUMBNAIL_DIRECTORY).absolutePath
 
     internal suspend fun readLibrary(privacyFingerprint: String): LibrarySnapshot? =
         tracedRead("library") {

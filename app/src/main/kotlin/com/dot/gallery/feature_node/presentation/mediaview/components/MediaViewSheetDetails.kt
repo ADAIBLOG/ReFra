@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CloudDone
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.LocalFireDepartment
+import androidx.compose.material.icons.outlined.PersonRemove
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -33,6 +34,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -42,17 +44,22 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.intl.Locale
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.toUpperCase
 import androidx.compose.ui.unit.dp
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
 import com.bumptech.glide.integration.compose.GlideImage
 import com.dot.gallery.R
 import com.dot.gallery.cloud.core.CloudUri
+import com.dot.gallery.cloud.core.PersonInfo
 import com.dot.gallery.cloud.ui.backup.CloudBackupInfoSheet
 import com.dot.gallery.cloud.ui.descriptor.ProviderBrandIcon
+import com.dot.gallery.cloud.ui.people.PersonAvatar
 import com.dot.gallery.core.Constants.Animation.enterAnimation
 import com.dot.gallery.core.Constants.Animation.exitAnimation
 import com.dot.gallery.core.LocalEventHandler
@@ -100,6 +107,7 @@ import com.dot.gallery.feature_node.presentation.util.rememberActivityResult
 import com.dot.gallery.feature_node.presentation.util.rememberAppBottomSheetState
 import com.dot.gallery.feature_node.presentation.util.rememberMediaInfo
 import com.dot.gallery.feature_node.presentation.util.trashRequest
+import com.dot.gallery.feature_node.presentation.vault.components.ConfirmationSheet
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
 import dev.chrisbanes.haze.materials.HazeMaterials
 import kotlinx.coroutines.launch
@@ -116,6 +124,7 @@ fun <T : Media> MediaViewSheetDetails(
     motionPhotoState: MotionPhotoState? = null,
     onOpenFramePicker: () -> Unit = {},
     cloudBackups: List<Media.UriMedia> = emptyList(),
+    onOpenPersonTimeline: (PersonInfo) -> Unit = {},
     metadataSanitizationState: MediaViewViewModel.MetadataSanitizationUiState =
         MediaViewViewModel.MetadataSanitizationUiState.Idle,
     probeMetadataSanitization: (Media) -> Unit = {},
@@ -335,6 +344,17 @@ fun <T : Media> MediaViewSheetDetails(
                 val metadataSheetState = rememberAppBottomSheetState()
                 val captureDateSheetState = rememberAppBottomSheetState()
                 val backupSheetState = rememberAppBottomSheetState()
+                val removePersonConfirmState = rememberAppBottomSheetState()
+                var pendingPerson by remember { mutableStateOf<PersonInfo?>(null) }
+
+                // On-device persons whose faces were detected in this media — emitted
+                // live so the people card and its remove flow stay in sync with removals.
+                val mediaViewViewModel = hiltViewModel<MediaViewViewModel>()
+                val mediaPeople by produceState<List<PersonInfo>>(emptyList(), currentMedia.id) {
+                    mediaViewViewModel.peopleForMedia(currentMedia.id).collect { value = it }
+                }
+                val unknownPersonText = stringResource(R.string.cloud_people_unknown)
+                val personPhotoCountFormat = stringResource(R.string.cloud_person_photo_count)
                 val allMetadataEventHandler = LocalEventHandler.current
                 val mediaInfoList = rememberMediaInfo(
                     media = currentMedia,
@@ -555,6 +575,69 @@ fun <T : Media> MediaViewSheetDetails(
                             }
                         }
                     }
+                    if (mediaPeople.isNotEmpty()) {
+                        item(key = "people") {
+                            Column(
+                                modifier = Modifier
+                                    .widthIn(max = 600.dp)
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .then(sheetCardBackgroundModifier)
+                                    .hazeEffectScaled(
+                                        state = LocalHazeState.current,
+                                        style = sheetCardHazeStyle
+                                    )
+                                    .padding(vertical = 16.dp)
+                            ) {
+                                mediaPeople.forEach { person ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 8.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .clickable { onOpenPersonTimeline(person) }
+                                            .padding(horizontal = 8.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        PersonAvatar(person = person, size = 40.dp)
+                                        Column(
+                                            modifier = Modifier.weight(1f),
+                                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                                        ) {
+                                            Text(
+                                                text = person.name.ifBlank { unknownPersonText },
+                                                style = MaterialTheme.typography.titleSmall,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = personPhotoCountFormat.format(person.assetCount),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                        Icon(
+                                            imageVector = Icons.Outlined.PersonRemove,
+                                            contentDescription = stringResource(R.string.cloud_person_remove_media),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier
+                                                .size(36.dp)
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .clickable {
+                                                    pendingPerson = person
+                                                    scope.launch { removePersonConfirmState.show() }
+                                                }
+                                                .padding(8.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                     item(key = "media_info") {
                         Column(
                             modifier = Modifier
@@ -722,6 +805,25 @@ fun <T : Media> MediaViewSheetDetails(
                     CloudBackupInfoSheet(
                         sheetState = backupSheetState,
                         backups = cloudBackups
+                    )
+                }
+
+                pendingPerson?.let { person ->
+                    ConfirmationSheet(
+                        state = removePersonConfirmState,
+                        title = pluralStringResource(
+                            R.plurals.cloud_person_remove_media_title,
+                            1,
+                            1,
+                            person.name.ifBlank { unknownPersonText }
+                        ),
+                        summary = stringResource(R.string.cloud_person_remove_media_summary),
+                        confirmText = stringResource(R.string.cloud_person_remove_media_confirm),
+                        onConfirm = {
+                            mediaViewViewModel.removeMediaFromPerson(person.id, currentMedia.id)
+                            pendingPerson = null
+                            scope.launch { removePersonConfirmState.hide() }
+                        }
                     )
                 }
 
