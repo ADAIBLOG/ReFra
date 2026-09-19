@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.Contrast
 import androidx.compose.material.icons.outlined.Draw
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.EditNote
+import androidx.compose.material.icons.outlined.Face
 import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material.icons.outlined.FolderCopy
 import androidx.compose.material.icons.outlined.Hub
@@ -39,6 +40,7 @@ import androidx.compose.material.icons.outlined.Slideshow
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Subtitles
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.VideoSettings
 import androidx.compose.material.icons.outlined.ZoomIn
 import com.dot.gallery.R
@@ -259,6 +261,10 @@ object HelpRepository {
             icon = HelpIcon.ofVector(Icons.Outlined.CalendarMonth), category = HelpCategory.TIMELINE_ALBUMS,
             deepLink = Screen.SettingsTimelineAlbumsScreen(),
             pages = listOf(TutorialPage(title = R.string.help_tip_timeline_modified_date_p1_title, description = R.string.help_tip_timeline_modified_date_p1_desc, steps = listOf(R.string.help_tip_timeline_modified_date_p1_s1, R.string.help_tip_timeline_modified_date_p1_s2, R.string.help_tip_timeline_modified_date_p1_s3))), sinceVersion = "5.1.4"),
+        HelpTip(id = "timeline_capture_date", title = R.string.help_tip_timeline_capture_date_title, subtitle = R.string.help_tip_timeline_capture_date_subtitle,
+            icon = HelpIcon.ofVector(Icons.Outlined.CalendarMonth), category = HelpCategory.TIMELINE_ALBUMS,
+            deepLink = Screen.SettingsTimelineAlbumsScreen(),
+            pages = listOf(TutorialPage(title = R.string.help_tip_timeline_capture_date_p1_title, description = R.string.help_tip_timeline_capture_date_p1_desc, steps = listOf(R.string.help_tip_timeline_capture_date_p1_s1, R.string.help_tip_timeline_capture_date_p1_s2, R.string.help_tip_timeline_capture_date_p1_s3, R.string.help_tip_timeline_capture_date_p1_s4))), sinceVersion = "5.2.0"),
         HelpTip(id = "timeline_date_header", title = R.string.help_tip_timeline_date_header_title, subtitle = R.string.help_tip_timeline_date_header_subtitle,
             icon = HelpIcon.ofVector(Icons.Outlined.Collections), category = HelpCategory.TIMELINE_ALBUMS,
             deepLink = Screen.SettingsTimelineAlbumsScreen(),
@@ -595,7 +601,13 @@ object HelpRepository {
             deepLink = Screen.PeopleListScreen(),
             pages = listOf(
                 TutorialPage(title = R.string.help_tip_people_grouping_p1_title, description = R.string.help_tip_people_grouping_p1_desc, steps = listOf(R.string.help_tip_people_grouping_p1_s1, R.string.help_tip_people_grouping_p1_s2, R.string.help_tip_people_grouping_p1_s3, R.string.help_tip_people_grouping_p1_s4), previewType = PreviewType.AI_CATEGORIES)
-            ), sinceVersion = "5.1.0")
+            ), sinceVersion = "5.1.0"),
+        HelpTip(id = "people_fix_faces", title = R.string.help_tip_people_fix_faces_title, subtitle = R.string.help_tip_people_fix_faces_subtitle,
+            icon = HelpIcon.ofVector(Icons.Outlined.Face), category = HelpCategory.AI_FEATURES,
+            deepLink = Screen.PeopleListScreen(),
+            pages = listOf(
+                TutorialPage(title = R.string.help_tip_people_fix_faces_p1_title, description = R.string.help_tip_people_fix_faces_p1_desc, steps = listOf(R.string.help_tip_people_fix_faces_p1_s1, R.string.help_tip_people_fix_faces_p1_s2, R.string.help_tip_people_fix_faces_p1_s3, R.string.help_tip_people_fix_faces_p1_s4), previewType = PreviewType.AI_CATEGORIES)
+            ), sinceVersion = "5.2.0")
     )
     // endregion
 
@@ -754,7 +766,22 @@ object HelpRepository {
         HelpTip(id = "cloud_free_up_space", title = R.string.help_tip_cloud_free_up_space_title, subtitle = R.string.help_tip_cloud_free_up_space_subtitle,
             icon = HelpIcon.ofVector(Icons.Outlined.Storage), category = HelpCategory.CLOUD_SYNC,
             deepLink = Screen.FreeUpSpaceScreen(),
-            pages = listOf(TutorialPage(title = R.string.help_tip_cloud_free_up_space_p1_title, description = R.string.help_tip_cloud_free_up_space_p1_desc)), sinceVersion = "5.1.0")
+            pages = listOf(TutorialPage(title = R.string.help_tip_cloud_free_up_space_p1_title, description = R.string.help_tip_cloud_free_up_space_p1_desc)), sinceVersion = "5.1.0"),
+        HelpTip(id = "cloud_two_way_sync", title = R.string.help_tip_cloud_two_way_sync_title, subtitle = R.string.help_tip_cloud_two_way_sync_subtitle,
+            icon = HelpIcon.ofVector(Icons.Outlined.Sync), category = HelpCategory.CLOUD_SYNC,
+            deepLink = Screen.SyncStatusScreen(),
+            pages = listOf(TutorialPage(title = R.string.help_tip_cloud_two_way_sync_p1_title, description = R.string.help_tip_cloud_two_way_sync_p1_desc, steps = listOf(R.string.help_tip_cloud_two_way_sync_p1_s1, R.string.help_tip_cloud_two_way_sync_p1_s2, R.string.help_tip_cloud_two_way_sync_p1_s3, R.string.help_tip_cloud_two_way_sync_p1_s4))), sinceVersion = "5.2.0"),
+        HelpTip(id = "cloud_smart_search", title = R.string.help_tip_cloud_smart_search_title, subtitle = R.string.help_tip_cloud_smart_search_subtitle,
+            icon = HelpIcon.ofVector(Icons.Outlined.ImageSearch), category = HelpCategory.CLOUD_SYNC,
+            deepLink = Screen.SettingsCloudIndexingScreen(),
+            pages = listOf(TutorialPage(title = R.string.help_tip_cloud_smart_search_p1_title, description = R.string.help_tip_cloud_smart_search_p1_desc, steps = listOf(R.string.help_tip_cloud_smart_search_p1_s1, R.string.help_tip_cloud_smart_search_p1_s2, R.string.help_tip_cloud_smart_search_p1_s3, R.string.help_tip_cloud_smart_search_p1_s4))), sinceVersion = "5.2.0"),
+        HelpTip(id = "cloud_upload_paths", title = R.string.help_tip_cloud_upload_paths_title, subtitle = R.string.help_tip_cloud_upload_paths_subtitle,
+            icon = HelpIcon.ofVector(Icons.Outlined.CloudUpload), category = HelpCategory.CLOUD_SYNC,
+            deepLink = Screen.CloudBackupDashboardScreen(),
+            pages = listOf(TutorialPage(title = R.string.help_tip_cloud_upload_paths_p1_title, description = R.string.help_tip_cloud_upload_paths_p1_desc, steps = listOf(R.string.help_tip_cloud_upload_paths_p1_s1, R.string.help_tip_cloud_upload_paths_p1_s2, R.string.help_tip_cloud_upload_paths_p1_s3, R.string.help_tip_cloud_upload_paths_p1_s4))), sinceVersion = "5.2.0"),
+        HelpTip(id = "cloud_transfer", title = R.string.help_tip_cloud_transfer_title, subtitle = R.string.help_tip_cloud_transfer_subtitle,
+            icon = HelpIcon.ofVector(Icons.Outlined.FolderCopy), category = HelpCategory.CLOUD_SYNC,
+            pages = listOf(TutorialPage(title = R.string.help_tip_cloud_transfer_p1_title, description = R.string.help_tip_cloud_transfer_p1_desc, steps = listOf(R.string.help_tip_cloud_transfer_p1_s1, R.string.help_tip_cloud_transfer_p1_s2, R.string.help_tip_cloud_transfer_p1_s3, R.string.help_tip_cloud_transfer_p1_s4))), sinceVersion = "5.2.0")
     )
     // endregion
 

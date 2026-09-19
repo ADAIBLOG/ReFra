@@ -1,0 +1,26 @@
+What's new in 5.2.0:
+
+• Rebuilt People with accurate face grouping, merge review and easy corrections
+• Two-way cloud sync: download remote media and propagate deletions
+• NFS shares as cloud providers
+• Server-side smart search and synced tags (Immich)
+• Custom remote upload folders per account and per album
+• Capture-time timeline ordering with editable capture dates
+• Copy and Move media to cloud albums, even across providers
+• Fluid shared-item viewer transitions with drag-to-dismiss peek
+
+Improvements:
+
+• Instant visual feedback for trash, delete, restore and favorite
+• Faster startup with cached Library and retained album state
+• Lighter, less intrusive cloud backup
+• Scrollable selection action bar with a new fill option
+
+Bug fixes:
+
+• Hidden cloud albums now hide their media from the timeline
+• Restored blurred video chrome and stable Story Cards dismissal
+• More reliable cloud thumbnails and remote deletion
+• Splash icon follows the chosen launcher logo
+• Saved location names repair automatically
+• Square map tiles on wide preview cards
