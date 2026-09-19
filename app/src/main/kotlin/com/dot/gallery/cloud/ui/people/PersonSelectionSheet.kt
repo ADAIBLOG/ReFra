@@ -5,16 +5,10 @@
 
 package com.dot.gallery.cloud.ui.people
 
-import android.app.Activity
-import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.PersonRemove
-import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
-import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
-import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,7 +31,6 @@ import kotlinx.coroutines.launch
  * plus a "Remove from person" action that un-assigns the selected media's faces from this
  * person (without deleting the media).
  */
-@OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
 @Composable
 fun BoxScope.PersonSelectionSheet(
     allMedia: MediaState<Media.UriMedia>,
@@ -49,10 +42,6 @@ fun BoxScope.PersonSelectionSheet(
     val selectedMediaList = allMedia.media.selectedMedia(selectedSet = selectedMedia)
     val scope = rememberCoroutineScope()
     val removeConfirmState = rememberAppBottomSheetState()
-    val windowSizeClass = calculateWindowSizeClass(LocalActivity.current as Activity)
-    val tabletMode = remember(windowSizeClass) {
-        windowSizeClass.widthSizeClass > WindowWidthSizeClass.Compact
-    }
 
     SelectionSheet(
         modifier = Modifier.align(Alignment.BottomEnd),
@@ -61,8 +50,7 @@ fun BoxScope.PersonSelectionSheet(
         extraBottomActions = {
             SelectionBarColumn(
                 imageVector = Icons.Outlined.PersonRemove,
-                title = stringResource(R.string.cloud_person_remove_media),
-                tabletMode = tabletMode
+                title = stringResource(R.string.cloud_person_remove_media)
             ) {
                 scope.launch { removeConfirmState.show() }
             }

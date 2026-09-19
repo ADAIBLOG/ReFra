@@ -524,7 +524,6 @@ fun <T : Media> BoxScope.SelectionSheet(
                     if (albumsState.value.albums.isNotEmpty() && cloudActionCapabilities.copyOrMove) {
                         SelectionBarColumn(
                             imageVector = SelectionAction.COPY.icon,
-                            tabletMode = tabletMode,
                             title = stringResource(SelectionAction.COPY.labelRes)
                         ) {
                             scope.launch { copySheetState.show() }
@@ -532,7 +531,6 @@ fun <T : Media> BoxScope.SelectionSheet(
                         if (!cloudSelectionReadOnly) {
                             SelectionBarColumn(
                                 imageVector = SelectionAction.MOVE.icon,
-                                tabletMode = tabletMode,
                                 title = stringResource(SelectionAction.MOVE.labelRes)
                             ) {
                                 scope.launch { moveSheetState.show() }
@@ -544,7 +542,6 @@ fun <T : Media> BoxScope.SelectionSheet(
                     if (cloudActionCapabilities.share) {
                         SelectionBarColumn(
                             imageVector = SelectionAction.SHARE.icon,
-                            tabletMode = tabletMode,
                             title = stringResource(SelectionAction.SHARE.labelRes)
                         ) {
                             scope.launch {
@@ -556,7 +553,6 @@ fun <T : Media> BoxScope.SelectionSheet(
                     if (cloudActionCapabilities.favorite && showFavoriteButton) {
                         SelectionBarColumn(
                             imageVector = SelectionAction.FAVORITE.icon,
-                            tabletMode = tabletMode,
                             title = stringResource(SelectionAction.FAVORITE.labelRes)
                         ) {
                             scope.launch { cloudSelectionViewModel.toggleFavorite(result, selectedMedia) }
@@ -569,7 +565,6 @@ fun <T : Media> BoxScope.SelectionSheet(
                         val failedText = context.getString(R.string.download_failed)
                         SelectionBarColumn(
                             imageVector = SelectionAction.DOWNLOAD.icon,
-                            tabletMode = tabletMode,
                             title = stringResource(SelectionAction.DOWNLOAD.labelRes)
                         ) {
                             scope.launch {
@@ -589,7 +584,6 @@ fun <T : Media> BoxScope.SelectionSheet(
                     if (cloudActionCapabilities.trash && cloudSupportsTrash) {
                         SelectionBarColumn(
                             imageVector = SelectionAction.TRASH.icon,
-                            tabletMode = tabletMode,
                             title = stringResource(R.string.trash)
                         ) {
                             scope.launch { cloudTrashConfirmState.show() }
@@ -599,7 +593,6 @@ fun <T : Media> BoxScope.SelectionSheet(
                     if (cloudActionCapabilities.trash) {
                         SelectionBarColumn(
                             imageVector = Icons.Outlined.DeleteForever,
-                            tabletMode = tabletMode,
                             title = stringResource(R.string.cloud_delete)
                         ) {
                             scope.launch { cloudDeleteConfirmState.show() }
@@ -612,7 +605,6 @@ fun <T : Media> BoxScope.SelectionSheet(
                             SelectionAction.SHARE -> {
                                 SelectionBarColumn(
                                     imageVector = action.icon,
-                                    tabletMode = tabletMode,
                                     title = stringResource(action.labelRes)
                                 ) {
                                     scope.launch {
@@ -623,7 +615,6 @@ fun <T : Media> BoxScope.SelectionSheet(
                             SelectionAction.FAVORITE -> {
                                 SelectionBarColumn(
                                     imageVector = action.icon,
-                                    tabletMode = tabletMode,
                                     title = stringResource(action.labelRes)
                                 ) {
                                     scope.launch {
@@ -635,7 +626,6 @@ fun <T : Media> BoxScope.SelectionSheet(
                             SelectionAction.COPY -> {
                                 SelectionBarColumn(
                                     imageVector = action.icon,
-                                    tabletMode = tabletMode,
                                     title = stringResource(action.labelRes)
                                 ) {
                                     if (isInVault) {
@@ -649,7 +639,6 @@ fun <T : Media> BoxScope.SelectionSheet(
                             SelectionAction.MOVE -> {
                                 SelectionBarColumn(
                                     imageVector = action.icon,
-                                    tabletMode = tabletMode,
                                     title = stringResource(
                                         if (isInPrivateFolder) R.string.private_folder_move_out
                                         else action.labelRes
@@ -671,7 +660,6 @@ fun <T : Media> BoxScope.SelectionSheet(
                                 } else if (isInPrivateFolder) {
                                     SelectionBarColumn(
                                         imageVector = action.icon,
-                                        tabletMode = tabletMode,
                                         title = stringResource(R.string.action_delete_permanently)
                                     ) {
                                         scope.launch { privateFolderDeleteConfirmState.show() }
@@ -679,7 +667,6 @@ fun <T : Media> BoxScope.SelectionSheet(
                                 } else if (isInVault) {
                                     SelectionBarColumn(
                                         imageVector = action.icon,
-                                        tabletMode = tabletMode,
                                         title = stringResource(R.string.action_delete_permanently)
                                     ) {
                                         scope.launch { vaultDeleteConfirmState.show() }
@@ -692,7 +679,6 @@ fun <T : Media> BoxScope.SelectionSheet(
                                     }
                                     SelectionBarColumn(
                                         imageVector = action.icon,
-                                        tabletMode = tabletMode,
                                         title = stringResource(id = trashEnabledRes),
                                         onItemLongClick = {
                                             scope.launch {
@@ -712,7 +698,6 @@ fun <T : Media> BoxScope.SelectionSheet(
                             SelectionAction.ADD_TO_VAULT -> {
                                 SelectionBarColumn(
                                     imageVector = if (isInVault) Icons.Outlined.Restore else action.icon,
-                                    tabletMode = tabletMode,
                                     title = stringResource(
                                         if (isInVault) R.string.restore else action.labelRes
                                     )
@@ -729,7 +714,6 @@ fun <T : Media> BoxScope.SelectionSheet(
                                 if (privateFolderConfigured) {
                                     SelectionBarColumn(
                                         imageVector = action.icon,
-                                        tabletMode = tabletMode,
                                         title = stringResource(action.labelRes)
                                     ) {
                                         scope.launch { privateFolderMoveConfirmState.show() }
@@ -739,7 +723,6 @@ fun <T : Media> BoxScope.SelectionSheet(
                             SelectionAction.EDIT -> {
                                 SelectionBarColumn(
                                     imageVector = action.icon,
-                                    tabletMode = tabletMode,
                                     title = stringResource(action.labelRes)
                                 ) {
                                     selectedMedia.firstOrNull()?.let { media ->
@@ -750,7 +733,6 @@ fun <T : Media> BoxScope.SelectionSheet(
                             SelectionAction.ROTATE -> {
                                 SelectionBarColumn(
                                     imageVector = action.icon,
-                                    tabletMode = tabletMode,
                                     title = stringResource(action.labelRes)
                                 ) {
                                     val (encodable, nonEncodable) = selectedMedia.partition {
@@ -772,7 +754,6 @@ fun <T : Media> BoxScope.SelectionSheet(
                                 if (cloudItems.isNotEmpty()) {
                                     SelectionBarColumn(
                                         imageVector = action.icon,
-                                        tabletMode = tabletMode,
                                         title = stringResource(action.labelRes)
                                     ) {
                                         scope.launch {
@@ -799,7 +780,6 @@ fun <T : Media> BoxScope.SelectionSheet(
                                     val coverSetText = stringResource(R.string.album_cover_updated)
                                     SelectionBarColumn(
                                         imageVector = action.icon,
-                                        tabletMode = tabletMode,
                                         title = stringResource(action.labelRes)
                                     ) {
                                         scope.launch {
@@ -1351,7 +1331,6 @@ private fun MiddleActionButton(
 fun RowScope.SelectionBarColumn(
     imageVector: ImageVector,
     title: String,
-    tabletMode: Boolean,
     onItemLongClick: (() -> Unit)? = null,
     onItemClick: () -> Unit,
 ) {
@@ -1361,14 +1340,12 @@ fun RowScope.SelectionBarColumn(
         if (showTitles) Modifier.defaultMinSize(minHeight = 80.dp)
         else Modifier.defaultMinSize(minHeight = 64.dp)
     }
-    val minWidthSizeModifier = remember(tabletMode) {
-        if (showTitles) {
-            if (tabletMode) Modifier.defaultMinSize(minWidth = 80.dp)
-            else Modifier.weight(1f)
-        } else {
-            if (tabletMode) Modifier.defaultMinSize(minWidth = 64.dp)
-            else Modifier.weight(1f)
-        }
+    // The bottom bar scrolls horizontally once items overflow, so items keep a
+    // minimum width instead of weighting to an equal share — when everything fits,
+    // the row's SpaceEvenly arrangement spreads them across the full width.
+    val minWidthSizeModifier = remember(showTitles) {
+        if (showTitles) Modifier.defaultMinSize(minWidth = 80.dp)
+        else Modifier.defaultMinSize(minWidth = 64.dp)
     }
     Column(
         modifier = Modifier

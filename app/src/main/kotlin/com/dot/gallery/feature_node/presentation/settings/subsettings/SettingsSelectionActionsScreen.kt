@@ -792,9 +792,9 @@ internal fun SelectionSheetPreview(
                     Column(
                         modifier = Modifier
                             .defaultMinSize(
+                                minWidth = if (showTitles) 80.dp else 64.dp,
                                 minHeight = if (showTitles) 80.dp else 64.dp
                             )
-                            .weight(1f)
                             .clip(RoundedCornerShape(12.dp))
                             .padding(top = 12.dp, bottom = 16.dp),
                         verticalArrangement = Arrangement.Center,
