@@ -72,6 +72,7 @@ interface MediaDistributor {
      */
     val albumsFlow: StateFlow<AlbumState>
     val blacklistedAlbumsFlow: StateFlow<List<IgnoredAlbum>>
+    val excludedFoldersFlow: StateFlow<Set<String>>
     val pinnedAlbumsFlow: StateFlow<List<PinnedAlbum>>
     val lockedAlbumsFlow: StateFlow<List<LockedAlbum>>
     val mergedSubfolderAlbumsFlow: StateFlow<List<MergedSubfolderAlbum>>
