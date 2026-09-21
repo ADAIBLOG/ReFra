@@ -469,6 +469,48 @@ object Settings {
 
     }
 
+    object ExcludedFolders {
+        private val EXCLUDED_FOLDERS = stringSetPreferencesKey("excluded_folders")
+
+        /**
+         * Folder paths (or glob patterns) whose contents are completely hidden from the
+         * timeline and album grid. Unlike the per-album blacklist, a single entry excludes the
+         * folder itself and every descendant, so new subfolders are covered automatically.
+         */
+        fun getExcludedFolders(context: Context): Flow<Set<String>> =
+            context.activeDataStore.data.map { it[EXCLUDED_FOLDERS] ?: emptySet() }
+
+        suspend fun setExcludedFolders(context: Context, folders: Set<String>) {
+            context.activeDataStore.edit { prefs ->
+                if (folders.isEmpty()) {
+                    prefs.remove(EXCLUDED_FOLDERS)
+                } else {
+                    prefs[EXCLUDED_FOLDERS] = folders
+                }
+            }
+        }
+
+        suspend fun addExcludedFolder(context: Context, folder: String) {
+            val normalized = folder.trim()
+            if (normalized.isEmpty()) return
+            context.activeDataStore.edit { prefs ->
+                prefs[EXCLUDED_FOLDERS] = (prefs[EXCLUDED_FOLDERS] ?: emptySet()) + normalized
+            }
+        }
+
+        suspend fun removeExcludedFolder(context: Context, folder: String) {
+            context.activeDataStore.edit { prefs ->
+                val current = prefs[EXCLUDED_FOLDERS] ?: emptySet()
+                val updated = current - folder
+                if (updated.isEmpty()) {
+                    prefs.remove(EXCLUDED_FOLDERS)
+                } else {
+                    prefs[EXCLUDED_FOLDERS] = updated
+                }
+            }
+        }
+    }
+
     object Misc {
         private val USER_CHOICE_MEDIA_MANAGER = booleanPreferencesKey("use_media_manager")
 
