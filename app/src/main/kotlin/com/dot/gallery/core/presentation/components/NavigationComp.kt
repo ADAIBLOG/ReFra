@@ -118,6 +118,7 @@ import com.dot.gallery.feature_node.presentation.settings.SettingsScreen
 import com.dot.gallery.feature_node.presentation.settings.subsettings.ColorPaletteScreen
 
 import com.dot.gallery.feature_node.presentation.settings.subsettings.SettingsGeneralScreen
+import com.dot.gallery.feature_node.presentation.settings.subsettings.SettingsExcludedFoldersScreen
 import com.dot.gallery.feature_node.presentation.settings.subsettings.SettingsMediaViewerScreen
 import com.dot.gallery.feature_node.presentation.settings.subsettings.SettingsNavigationScreen
 import com.dot.gallery.feature_node.presentation.settings.subsettings.SettingsSelectionActionsScreen
@@ -1256,6 +1257,9 @@ fun NavigationComp(
             }
             composable(Screen.SettingsGeneralScreen()) {
                 SettingsGeneralScreen()
+            }
+            composable(Screen.SettingsExcludedFoldersScreen()) {
+                SettingsExcludedFoldersScreen()
             }
             composable(Screen.SettingsSmartFeaturesScreen()) {
                 SettingsSmartFeaturesScreen()
