@@ -74,6 +74,7 @@ open class MockedMediaDistributor: MediaDistributor {
     override val settingsFlow: StateFlow<TimelineSettings?> = MutableStateFlow(null)
     override val albumsFlow: StateFlow<AlbumState> = MutableStateFlow(AlbumState())
     override val blacklistedAlbumsFlow: StateFlow<List<IgnoredAlbum>> = MutableStateFlow(emptyList())
+    override val excludedFoldersFlow: StateFlow<Set<String>> = MutableStateFlow(emptySet())
     override val pinnedAlbumsFlow: StateFlow<List<PinnedAlbum>> = MutableStateFlow(emptyList())
     override val lockedAlbumsFlow: StateFlow<List<LockedAlbum>> = MutableStateFlow(emptyList())
     override val mergedSubfolderAlbumsFlow: StateFlow<List<MergedSubfolderAlbum>> = MutableStateFlow(emptyList())
