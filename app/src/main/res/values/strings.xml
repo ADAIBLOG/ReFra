@@ -261,6 +261,14 @@
     <string name="copied_to_clipboard">Copied to clipboard</string>
     <string name="error_copying_to_clipboard">Failed to copy to clipboard</string>
     <string name="ignored_albums">Ignored Albums</string>
+    <string name="excluded_folders_title">Excluded Folders</string>
+    <string name="excluded_folders_summary">Hide the contents of specific folders and their subfolders from the timeline and albums.</string>
+    <string name="no_excluded_folders">No excluded folders</string>
+    <string name="excluded_folder_add">Add excluded folder</string>
+    <string name="excluded_folder_remove">Remove excluded folder</string>
+    <string name="excluded_folder_add_title">Add excluded folder</string>
+    <string name="excluded_folder_add_description">Enter a folder path (e.g. /storage/emulated/0/Blog/) or a glob pattern (e.g. */Blog/**). The folder and everything inside it will be hidden.</string>
+    <string name="excluded_folder_hint">/storage/emulated/0/Blog or */Blog/**</string>
     <string name="add_to_ignored">Add to ignored albums</string>
     <string name="override">Overwrite</string>
     <string name="save_copy">Save Copy</string>
