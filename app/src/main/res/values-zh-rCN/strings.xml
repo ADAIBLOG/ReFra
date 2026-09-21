@@ -167,6 +167,14 @@
     <string name="copied_to_clipboard">已复制到剪贴板</string>
     <string name="error_copying_to_clipboard">无法复制到剪贴板</string>
     <string name="ignored_albums">隐藏的相册</string>
+    <string name="excluded_folders_title">排除的文件夹</string>
+    <string name="excluded_folders_summary">在时间线和相册中隐藏指定文件夹及其所有子文件夹的内容。</string>
+    <string name="no_excluded_folders">没有排除的文件夹</string>
+    <string name="excluded_folder_add">添加排除的文件夹</string>
+    <string name="excluded_folder_remove">移除排除的文件夹</string>
+    <string name="excluded_folder_add_title">添加排除的文件夹</string>
+    <string name="excluded_folder_add_description">输入文件夹路径（例如 /storage/emulated/0/Blog/）或通配符模式（例如 */Blog/**）。该文件夹及其中的所有内容都将被隐藏。</string>
+    <string name="excluded_folder_hint">/storage/emulated/0/Blog 或 */Blog/**</string>
     <string name="add_to_ignored">添加到隐藏的相册</string>
     <string name="override">覆盖</string>
     <string name="save_copy">保存副本</string>
