@@ -40,6 +40,7 @@ import com.dot.gallery.feature_node.domain.model.MediaCategory
 import com.dot.gallery.feature_node.domain.model.MediaVersion
 import com.dot.gallery.feature_node.domain.repository.MediaRepository
 import com.dot.gallery.feature_node.domain.util.FloatVectorCodec
+import com.dot.gallery.feature_node.domain.util.isInExcludedFolder
 import com.dot.gallery.feature_node.presentation.search.helpers.SearchVisionHelper
 import com.dot.gallery.feature_node.presentation.search.util.dot
 import com.dot.gallery.feature_node.presentation.util.mediaStoreVersion
@@ -273,12 +274,13 @@ class SourceSyncProcessor @Inject constructor(
         }
         val ignoredAlbums = repository.getBlacklistedAlbumsAsync()
         val lockedAlbumIds = repository.getLockedAlbums().first().mapTo(hashSetOf()) { it.id }
+        val excludedFolders = Settings.ExcludedFolders.getExcludedFolders(appContext).first()
         val media = smartFeatureMediaPool(
             media = localSource,
             includeIgnoredAlbums = Settings.SmartFeatures.includeIgnoredAlbums(appContext).first(),
             isIgnored = { item -> ignoredAlbums.any { it.matchesMedia(item) } },
             isLocked = { item -> item.albumID in lockedAlbumIds }
-        )
+        ).filterNot { it.isInExcludedFolder(excludedFolders) }
         val cloud = database.getCloudMediaDao().getAllCachedAsync()
         val existing = existingMedia.associateBy { it.id }
         val changed = media.filter { existing[it.id] != it }
