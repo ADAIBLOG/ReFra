@@ -65,6 +65,7 @@ import com.dot.gallery.feature_node.domain.util.cloudGroupKey
 import com.dot.gallery.feature_node.domain.util.groupKey
 import com.dot.gallery.feature_node.domain.util.getUri
 import com.dot.gallery.feature_node.domain.util.isCloud
+import com.dot.gallery.feature_node.domain.util.isInExcludedFolder
 import com.dot.gallery.feature_node.domain.util.mapLocked
 import com.dot.gallery.feature_node.domain.util.mapPinned
 import com.dot.gallery.feature_node.domain.util.removeBlacklisted
@@ -442,6 +443,26 @@ class MediaDistributorImpl @Inject constructor(
                 initialValue = emptyList()
             )
 
+    private val _excludedFoldersInternal = MutableStateFlow<Set<String>?>(null)
+
+    init {
+        appScope.launch {
+            _excludedFoldersInternal.value = Settings.ExcludedFolders.getExcludedFolders(context).first()
+            Settings.ExcludedFolders.getExcludedFolders(context).collect {
+                _excludedFoldersInternal.value = it
+            }
+        }
+    }
+
+    override val excludedFoldersFlow: StateFlow<Set<String>> =
+        _excludedFoldersInternal
+            .map { it ?: emptySet() }
+            .stateIn(
+                scope = appScope,
+                started = prioritySharingMethod,
+                initialValue = emptySet()
+            )
+
     override val pinnedAlbumsFlow: StateFlow<List<PinnedAlbum>> =
         repository.getPinnedAlbums()
             .stateIn(
@@ -790,6 +811,8 @@ class MediaDistributorImpl @Inject constructor(
                 .onEach { StartupTracer.begin("albums.dep.pinned(${it.size})").also { s -> StartupTracer.end(s) } },
             _blacklistedAlbumsInternal
                 .onEach { StartupTracer.begin("albums.dep.blacklisted(${it?.size ?: -1})").also { s -> StartupTracer.end(s) } },
+            _excludedFoldersInternal
+                .onEach { StartupTracer.begin("albums.dep.excludedFolders(${it?.size ?: -1})").also { s -> StartupTracer.end(s) } },
             _lockedAlbumsInternal
                 .onEach { StartupTracer.begin("albums.dep.locked(${it?.size ?: -1})").also { s -> StartupTracer.end(s) } },
             settingsFlow
@@ -824,44 +847,48 @@ class MediaDistributorImpl @Inject constructor(
             @Suppress("UNCHECKED_CAST")
             val blacklistedAlbums = values[2] as List<IgnoredAlbum>?
             @Suppress("UNCHECKED_CAST")
-            val lockedAlbums = values[3] as List<LockedAlbum>?
-            val settings = values[4] as TimelineSettings?
+            val excludedFolders = values[3] as Set<String>?
+            @Suppress("UNCHECKED_CAST")
+            val lockedAlbums = values[4] as List<LockedAlbum>?
+            val settings = values[5] as TimelineSettings?
             // Keep loading until both albums and blacklisted albums are loaded from their sources
-            if (result == null || blacklistedAlbums == null || lockedAlbums == null || settings == null) {
+            if (result == null || blacklistedAlbums == null || lockedAlbums == null || settings == null || excludedFolders == null) {
                 return@combine AlbumState()
             }
             val combineSpan = StartupTracer.begin("albums.combine_body(${result.data?.size ?: 0} albums)")
             @Suppress("UNCHECKED_CAST")
             val pinnedAlbums = values[1] as List<PinnedAlbum>
             @Suppress("UNCHECKED_CAST")
-            val thumbnails = values[5] as List<AlbumThumbnail>
+            val thumbnails = values[6] as List<AlbumThumbnail>
             @Suppress("UNCHECKED_CAST")
-            val groups = values[6] as List<AlbumGroup>
+            val groups = values[7] as List<AlbumGroup>
             @Suppress("UNCHECKED_CAST")
-            val groupMembers = values[7] as List<AlbumGroupMember>
-            val shouldMerge = values[8] as Boolean
+            val groupMembers = values[8] as List<AlbumGroupMember>
+            val shouldMerge = values[9] as Boolean
             @Suppress("UNCHECKED_CAST")
-            val mergedSubfolders = values[9] as List<MergedSubfolderAlbum>
+            val mergedSubfolders = values[10] as List<MergedSubfolderAlbum>
             @Suppress("UNCHECKED_CAST")
-            val collections = values[10] as List<CollectionWithCount>
+            val collections = values[11] as List<CollectionWithCount>
             @Suppress("UNCHECKED_CAST")
-            val collectionAlbumIds = values[11] as Set<Long>
+            val collectionAlbumIds = values[12] as Set<Long>
             @Suppress("UNCHECKED_CAST")
-            val cloudAlbums = values[12] as List<CloudAlbum>
+            val cloudAlbums = values[13] as List<CloudAlbum>
             @Suppress("UNCHECKED_CAST")
-            val unsortedCloudAlbums = values[13] as List<Album>
+            val unsortedCloudAlbums = values[14] as List<Album>
             @Suppress("UNCHECKED_CAST")
-            val sections = values[14] as List<AlbumSection>
+            val sections = values[15] as List<AlbumSection>
             @Suppress("UNCHECKED_CAST")
-            val sectionMembers = values[15] as List<AlbumSectionMember>
-            val areSectionsEnabled = values[16] as Boolean
+            val sectionMembers = values[16] as List<AlbumSectionMember>
+            val areSectionsEnabled = values[17] as Boolean
             val newOrder = settings.albumMediaOrder
             val thumbnailMap = thumbnails.associateBy { it.albumId }
             val localAlbums = newOrder.sortAlbums(result.data ?: emptyList()).map { album ->
                 val thumbnail = thumbnailMap[album.id] ?: return@map album
                 album.copy(uri = thumbnail.thumbnailUri)
             }
-            val rawLocalAlbums = localAlbums.removeBlacklisted(blacklistedAlbums)
+            val rawLocalAlbums = localAlbums
+                .filterNot { it.isInExcludedFolder(excludedFolders) }
+                .removeBlacklisted(blacklistedAlbums)
                 .mapPinned(pinnedAlbums)
                 .mapLocked(lockedAlbums)
             val subfolderMergedData = AlbumMergeResolver.mergeSubfolders(
@@ -1114,6 +1141,7 @@ class MediaDistributorImpl @Inject constructor(
                     mediaSource,
                     settingsFlow,
                     _blacklistedAlbumsInternal,
+                    _excludedFoldersInternal,
                     dateFormatsFlow,
                     albumMediaSortFlow,
                     groupSimilarMedia,
@@ -1123,22 +1151,27 @@ class MediaDistributorImpl @Inject constructor(
                     val settings = values[1] as TimelineSettings?
                     @Suppress("UNCHECKED_CAST")
                     val blacklistedAlbums = values[2] as List<IgnoredAlbum>?
-                    if (blacklistedAlbums == null || settings == null) {
+                    @Suppress("UNCHECKED_CAST")
+                    val excludedFolders = values[3] as Set<String>?
+                    if (blacklistedAlbums == null || settings == null || excludedFolders == null) {
                         return@combine MediaState()
                     }
                     @Suppress("UNCHECKED_CAST")
-                    val dateFormats = values[3] as Triple<String, String, String>
-                    val albumSort = values[4] as Settings.Album.LastSort
-                    val shouldGroupSimilar = values[5] as Boolean
+                    val dateFormats = values[4] as Triple<String, String, String>
+                    val albumSort = values[5] as Settings.Album.LastSort
+                    val shouldGroupSimilar = values[6] as Boolean
                     @Suppress("UNCHECKED_CAST")
-                    val groupTypes = values[6] as Set<MediaGroupType>
+                    val groupTypes = values[7] as Set<MediaGroupType>
 
                     val (defaultDateFormat, extendedDateFormat, weeklyDateFormat) = dateFormats
 
                     val sorter = albumSort.toMediaOrder()
 
                     val filtered = (mediaResult.data ?: emptyList()).toMutableList().apply {
-                        removeAll { media -> blacklistedAlbums.any { it.shouldIgnore(media, albumId) } }
+                        removeAll { media ->
+                            media.isInExcludedFolder(excludedFolders) ||
+                                blacklistedAlbums.any { it.shouldIgnore(media, albumId) }
+                        }
                     }
                     mapMediaToItem(
                         data = sorter.sortMedia(filtered),
@@ -1196,6 +1229,8 @@ class MediaDistributorImpl @Inject constructor(
                 .onEach { StartupTracer.begin("$tag.dep.settingsFlow").also { s -> StartupTracer.end(s) } },
             _blacklistedAlbumsInternal
                 .onEach { StartupTracer.begin("$tag.dep.blacklistedAlbums(${it?.size ?: -1})").also { s -> StartupTracer.end(s) } },
+            _excludedFoldersInternal
+                .onEach { StartupTracer.begin("$tag.dep.excludedFolders(${it?.size ?: -1})").also { s -> StartupTracer.end(s) } },
             _lockedAlbumsInternal
                 .onEach { StartupTracer.begin("$tag.dep.lockedAlbums(${it?.size ?: -1})").also { s -> StartupTracer.end(s) } },
             dateFormatsFlow
@@ -1220,24 +1255,26 @@ class MediaDistributorImpl @Inject constructor(
             @Suppress("UNCHECKED_CAST")
             val blacklistedAlbums = values[2] as List<IgnoredAlbum>?
             @Suppress("UNCHECKED_CAST")
-            val lockedAlbums = values[3] as List<LockedAlbum>?
-            if (blacklistedAlbums == null || lockedAlbums == null || settings == null) {
+            val excludedFolders = values[3] as Set<String>?
+            @Suppress("UNCHECKED_CAST")
+            val lockedAlbums = values[4] as List<LockedAlbum>?
+            if (blacklistedAlbums == null || lockedAlbums == null || settings == null || excludedFolders == null) {
                 StartupTracer.end(combineSpan)
                 return@combine MediaState()
             }
             @Suppress("UNCHECKED_CAST")
-            val dateFormats = values[4] as Triple<String, String, String>
-            val albumSort = values[5] as Settings.Album.LastSort
-            val timelineSort = values[6] as Settings.Album.LastSort
-            val shouldGroupSimilar = values[7] as Boolean
+            val dateFormats = values[5] as Triple<String, String, String>
+            val albumSort = values[6] as Settings.Album.LastSort
+            val timelineSort = values[7] as Settings.Album.LastSort
+            val shouldGroupSimilar = values[8] as Boolean
             @Suppress("UNCHECKED_CAST")
-            val groupTypes = values[8] as Set<MediaGroupType>
+            val groupTypes = values[9] as Set<MediaGroupType>
             @Suppress("UNCHECKED_CAST")
-            val cloudMedia = values[9] as List<Media.UriMedia>
+            val cloudMedia = values[10] as List<Media.UriMedia>
             @Suppress("UNCHECKED_CAST")
-            val cloudAlbums = values[10] as List<CloudAlbum>
+            val cloudAlbums = values[11] as List<CloudAlbum>
             @Suppress("UNCHECKED_CAST")
-            val cloudAlbumMembers = values[11] as Map<CloudAlbumMemberId, Set<CloudAlbumMemberId>>
+            val cloudAlbumMembers = values[12] as Map<CloudAlbumMemberId, Set<CloudAlbumMemberId>>
             
             val (defaultDateFormat, extendedDateFormat, weeklyDateFormat) = dateFormats
             
@@ -1258,7 +1295,10 @@ class MediaDistributorImpl @Inject constructor(
             val dateSource = activeSort?.dateSource ?: TimelineDateSource.CAPTURE_TIME
             val lockedAlbumIds = lockedAlbums.mapTo(HashSet()) { it.id }
             val data = (result.data ?: emptyList()).toMutableList().apply {
-                removeAll { media -> blacklistedAlbums.any { it.shouldIgnore(media, albumId) } }
+                removeAll { media ->
+                    media.isInExcludedFolder(excludedFolders) ||
+                        blacklistedAlbums.any { it.shouldIgnore(media, albumId) }
+                }
                 if (isMainTimeline) {
                     removeAll { media -> media.albumID in lockedAlbumIds }
                 }
@@ -1277,9 +1317,9 @@ class MediaDistributorImpl @Inject constructor(
                 val hidePredicate = hiddenCloudMediaPredicate(
                     blacklistedAlbums, cloudAlbums, cloudAlbumMembers
                 )
-                val visibleCloudMedia = hidePredicate?.let { hidden ->
+                val visibleCloudMedia = (hidePredicate?.let { hidden ->
                     cloudMedia.filterNot { m -> cloudMemberKey(m.uri.toString())?.let(hidden) == true }
-                } ?: cloudMedia
+                } ?: cloudMedia).filterNot { it.isInExcludedFolder(excludedFolders) }
                 if (MediaGroupType.CLOUD_LOCAL in groupTypes) {
                     val localByBasename = HashMap<String, Long>(data.size)
                     for (m in data) {
