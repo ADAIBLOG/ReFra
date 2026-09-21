@@ -88,6 +88,7 @@ sealed class Screen(val route: String) {
     data object SettingsScreen : Screen("settings_screen")
     data object ColorPaletteScreen : Screen("color_palette_screen")
     data object SettingsGeneralScreen : Screen("settings_general_screen")
+    data object SettingsExcludedFoldersScreen : Screen("settings_excluded_folders_screen")
     data object SettingsSmartFeaturesScreen : Screen("settings_smart_features_screen")
     data object SettingsCloudIndexingScreen : Screen("settings_cloud_indexing_screen")
     data object SmartScanPreferenceDetailScreen : Screen("smart_scan_preference_detail_screen")
